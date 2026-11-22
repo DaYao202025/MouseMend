@@ -95,8 +95,19 @@ if ($untracked.Count -gt 0) {
 }
 
 if (-not $Message) {
-    $Message = (& git log -1 --format=%s).Trim()
-    Write-Host ("no -Message given, using the last commit subject: {0}" -f $Message) -ForegroundColor Yellow
+    # %B is the whole message. Using %s here silently dropped the body of every
+    # commit that had one, which is how two commits ended up on the remote with
+    # a subject and nothing else.
+    $Message = (& git log -1 --format='%B').Trim()
+    Write-Host 'no -Message given, reusing the full message of the last local commit'
+}
+else {
+    $localSubject = (& git log -1 --format=%s).Trim()
+    $localBody = (& git log -1 --format='%B').Trim()
+    if ($Message.Trim() -eq $localSubject -and $localBody.Length -gt $localSubject.Length) {
+        Write-Host 'warning: -Message is only the subject, but the local commit has a body.' -ForegroundColor Yellow
+        Write-Host '         pass no -Message at all to keep the full text.' -ForegroundColor Yellow
+    }
 }
 
 # The file list comes from git, so .gitignore decides what is published and
