@@ -23,20 +23,26 @@
 
 ## Screenshots / 界面
 
+<!-- Images are served through jsDelivr rather than by relative path. GitHub
+     serves relative README images from raw.githubusercontent.com, which does
+     not resolve on networks where that host is blocked, so the pictures were
+     showing up as broken alt text for exactly the readers this project is
+     published for. jsDelivr serves the same bytes out of the same commit.
+     If the repository is renamed or moved, these three URLs have to follow. -->
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="MouseMend/doc/screenshots/checkup-zh.png" width="430" alt="鼠标体检窗口（中文）"><br>
+      <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-zh.png" width="430" alt="鼠标体检窗口（中文）"><br>
       <sub>鼠标体检 —— 中文界面</sub>
     </td>
     <td align="center" width="50%">
-      <img src="MouseMend/doc/screenshots/checkup-en.png" width="430" alt="Mouse check-up window (English)"><br>
+      <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-en.png" width="430" alt="Mouse check-up window (English)"><br>
       <sub>Mouse check-up — English UI</sub>
     </td>
   </tr>
   <tr>
     <td align="center" colspan="2">
-      <img src="MouseMend/doc/screenshots/tray-menu.png" width="230" alt="托盘右键菜单"><br>
+      <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/tray-menu.png" width="230" alt="托盘右键菜单"><br>
       <sub>托盘图标的右键菜单 / the tray menu</sub>
     </td>
   </tr>

@@ -197,6 +197,36 @@ $tree = Invoke-RestMethod "https://api.github.com/repos/DaYao202025/MouseMend/gi
 
 **不要因为网页没变就重复推送**——脚本是幂等的（每次重建整棵 tree），重复推只会多一个空提交。
 
+### 坑 9：README 里的图片显示成破图
+
+现象：仓库里的 PNG 明明存在、大小也对，网页上却只显示 alt 文字（"鼠标体检窗口（中文）"之类），三个都破。
+
+**先分清两种原因，不要急着改文件：**
+
+1. **文件真的坏了** —— 用 API 取回来跟本地比对字节：
+   ```powershell
+   $h = @{ Authorization = "Bearer $token"; 'User-Agent' = 'x'; 'Accept' = 'application/vnd.github.raw' }
+   $remote = Invoke-WebRequest "https://api.github.com/repos/DaYao202025/MouseMend/contents/MouseMend/doc/screenshots/checkup-zh.png" -Headers $h
+   ```
+   比 SHA-256 + 看前 4 字节是不是 `89 50 4E 47`。本项目实测：**三张全部与本地一致**，文件没问题。
+
+2. **文件没坏，是取不到** —— GitHub 对 README 里的**相对路径**图片，是从 `raw.githubusercontent.com` 提供的。这个域名在部分网络下 **DNS 直接解析失败**（本机实测 `DNS FAILED`，而 `github.com` / `api.github.com` / `camo.githubusercontent.com` / `cdn.jsdelivr.net` 都能解析）。于是页面能打开、图全是破的。
+
+**对策（本项目采用）**：README 里的 `<img>` 改用 jsDelivr 直链，它从同一个提交里取同样的字节：
+
+```
+https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-zh.png
+```
+
+实测三张都在 jsDelivr 上返回 200 且 SHA-256 与本地一致，本机直接可访问。
+
+**这个选择的代价，记清楚：**
+- 写死了仓库名 `DaYao202025/MouseMend`。**仓库改名或转移后，这两个 README 里的 3+3 处 URL 必须同步改**，否则图全破。
+- 依赖第三方 CDN。jsDelivr 对 `@main` 有约 12 小时缓存，换了截图要等缓存过期（或换个文件名）。
+- 别人 fork 出去，图仍然指向本仓库。
+
+**如果哪天不需要照顾受限网络了**，改回相对路径即可（`MouseMend/doc/screenshots/xxx.png` / `doc/screenshots/xxx.png`）。
+
 ### 坑 8：代码页垃圾输出
 
 `powershell.exe` 5.1 的管道按 ANSI 解码，中文会变乱码。**统一用 `pwsh`**（PowerShell 7），并且把脚本写成文件用 `-File` 调用，不要用 `-Command`（`$` 会被吞掉）。
