@@ -257,7 +257,11 @@ Write-Host ("{0} -> {1}" -f $moved.ref, $moved.object.sha)
 # ---------------------------------------------------------------- verify
 Write-Host '=== verify ===' -ForegroundColor Cyan
 $r = Invoke-RestMethod $api -Headers $headers -TimeoutSec 60
-$tree = Invoke-RestMethod "$api/git/trees/$Branch?recursive=1" -Headers $headers -TimeoutSec 60
+
+# Resolve the branch to its commit first: asking for a tree by branch name can
+# answer 404 for a moment right after the ref was moved.
+$head = (Invoke-RestMethod "$api/git/ref/heads/$Branch" -Headers $headers -TimeoutSec 60).object.sha
+$tree = Invoke-RestMethod "$api/git/trees/$head`?recursive=1" -Headers $headers -TimeoutSec 60
 $blobs = @($tree.tree | Where-Object { $_.type -eq 'blob' })
 
 Write-Host ("  default branch : {0}" -f $r.default_branch)

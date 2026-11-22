@@ -13,12 +13,12 @@
 | 可见性 | Public |
 | 默认分支 | `main` |
 | 许可证 | MIT（GitHub 已识别） |
-| 远程提交数 | **1**（根提交，刻意压平） |
-| 远程文件数 | 76 |
+| 远程提交数 | **2**：`ab157c9` 根提交（发布基线）+ `01fed38`（补根 README 与本文档） |
+| 远程文件数 | 75 |
 | 本地仓库根 | `E:\TEST\Mouse`（项目在 `MouseMend\` 子目录） |
-| 本地分支 | `main` = 完整开发历史 |
+| 本地分支 | 只有 `main`，含完整开发历史 |
 
-**远程历史为什么只有一条**：这个项目源自另一个仓库，本地历史里有原作者和另一位贡献者的姓名与邮箱。公开发布时按需求压平成一个根提交，那些身份信息就不会出现在 GitHub 上。之后每次发布在根提交之上**追加**，历史正常生长。
+**远程历史为什么从一条开始**：这个项目源自另一个仓库，本地历史里有原作者和另一位贡献者的姓名与邮箱。公开发布时按需求压平成一个根提交，那些身份信息就不会出现在 GitHub 上。之后每次发布在**已有的 head 之上追加**，历史正常生长，但永远不会接回本地那条老历史。
 
 ---
 
@@ -181,7 +181,23 @@ git rm --cached -r . ; git reset --hard
 
 项目约定是 LF（`.c`/`.h`/`.md`/`.ps1` 全部无 BOM + LF）。这不影响编译，只影响"发布出去的样子"。
 
-### 坑 7：代码页垃圾输出
+### 坑 7：推送成功后网页还是旧的
+
+推完立刻刷新网页，可能仍然看到"1 Commit"、根目录没有 `README.md`——**这不是失败，是 CDN 缓存**。
+
+同一个 URL 用命令行抓取，拿到的可能是几分钟前的快照。判断推送是否真的成功，**只信 API**：
+
+```powershell
+$head = (Invoke-RestMethod "https://api.github.com/repos/DaYao202025/MouseMend/git/ref/heads/main" -Headers $h).object.sha
+$tree = Invoke-RestMethod "https://api.github.com/repos/DaYao202025/MouseMend/git/trees/$head`?recursive=1" -Headers $h
+($tree.tree | Where-Object { $_.type -eq 'blob' }).Count
+```
+
+如果这里显示 75 个文件、并且 `README.md` 在列表里，那就是成功了。网页通常几分钟后跟上，实在不行强制刷新（`Ctrl+F5`）。
+
+**不要因为网页没变就重复推送**——脚本是幂等的（每次重建整棵 tree），重复推只会多一个空提交。
+
+### 坑 8：代码页垃圾输出
 
 `powershell.exe` 5.1 的管道按 ANSI 解码，中文会变乱码。**统一用 `pwsh`**（PowerShell 7），并且把脚本写成文件用 `-File` 调用，不要用 `-Command`（`$` 会被吞掉）。
 
