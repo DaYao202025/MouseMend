@@ -21,6 +21,36 @@
 
 ---
 
+## Screenshots / 界面
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="MouseMend/doc/screenshots/checkup-zh.png" width="430" alt="鼠标体检窗口（中文）"><br>
+      <sub>鼠标体检 —— 中文界面</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="MouseMend/doc/screenshots/checkup-en.png" width="430" alt="Mouse check-up window (English)"><br>
+      <sub>Mouse check-up — English UI</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <img src="MouseMend/doc/screenshots/tray-menu.png" width="230" alt="托盘右键菜单"><br>
+      <sub>托盘图标的右键菜单 / the tray menu</sub>
+    </td>
+  </tr>
+</table>
+
+The check-up window is the main window: it opens on every start, and closing it
+puts it back into the tray without losing the session. It is strictly read-only,
+so what it shows cannot change what the engine does.
+
+鼠标体检窗口就是主窗体：每次启动都会打开，关闭只是收进托盘、会话不丢。
+它严格只读 —— 看到的内容不会反过来改变引擎的行为。
+
+---
+
 ## English
 
 A mechanical mouse switch wears out long before the rest of the mouse does. The

@@ -119,6 +119,15 @@ from the engine.
 * **Live language switch** — changing the language from the tray menu repaints
   the open window immediately.
 
+<p align="center">
+  <img src="doc/screenshots/checkup-zh.png" width="430" alt="Check-up window, Chinese UI">
+  <img src="doc/screenshots/checkup-en.png" width="430" alt="Check-up window, English UI">
+  <br>
+  <img src="doc/screenshots/tray-menu.png" width="230" alt="Tray menu">
+  <br>
+  <sub>检查窗口（中 / 英）与托盘右键菜单 · check-up window and tray menu</sub>
+</p>
+
 ### Tray behaviour
 
 | Action | Result |

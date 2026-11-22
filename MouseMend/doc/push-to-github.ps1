@@ -104,7 +104,14 @@ if (-not $Message) {
 $paths = @(& git ls-files)
 Write-Host ("tracked files: {0}" -f $paths.Count)
 
-$forbidden = $paths | Where-Object { $_ -match '\.(png|jpg|txt|exe|pfx)$|(^|/)\.vs/|(^|/)bin/' }
+# Screenshots are published on purpose; everything else that looks like a
+# scratch file or a build artefact is not.
+$forbidden = $paths | Where-Object {
+    ($_ -match '\.(jpg|jpeg|gif|bmp|exe|pfx|txt)$') -or
+    ($_ -match '\.png$' -and $_ -notmatch '^MouseMend/doc/screenshots/') -or
+    ($_ -match '(^|/)\.vs/') -or
+    ($_ -match '(^|/)bin/')
+}
 if ($forbidden) {
     Write-Host 'refusing to publish:' -ForegroundColor Red
     $forbidden | ForEach-Object { Write-Host ("  {0}" -f $_) }
