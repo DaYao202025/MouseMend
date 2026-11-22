@@ -1,0 +1,192 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "resource.h"
+#include "version.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#include "winres.h"
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// English resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+LANGUAGE LANG_ENGLISH, SUBLANG_NEUTRAL
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION APP_VERSION_MAJOR,APP_VERSION_MINOR,APP_VERSION_PATCH,0
+ PRODUCTVERSION APP_VERSION_MAJOR,APP_VERSION_MINOR,APP_VERSION_PATCH,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "000904b0"
+        BEGIN
+            VALUE "CompanyName", APP_COMPANY
+            VALUE "FileDescription", APP_NAME
+            VALUE "FileVersion", APP_VERSION_STRING ".0"
+            VALUE "InternalName", APP_NAME ".exe"
+            VALUE "LegalCopyright", APP_COPYRIGHT
+            VALUE "OriginalFilename", APP_NAME ".exe"
+            VALUE "ProductName", APP_NAME
+            VALUE "ProductVersion", APP_VERSION_STRING ".0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x9, 1200
+    END
+END
+
+#endif    // English resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+/////////////////////////////////////////////////////////////////////////////
+// Neutral (Default) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_NEUD)
+LANGUAGE LANG_NEUTRAL, SUBLANG_DEFAULT
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems.
+IDI_MAINICON            ICON                    "resources/icon.ico"
+
+IDI_NOTIFYICON          ICON                    "resources/notify.ico"
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Settings window
+//
+// All captions are empty on purpose: they are filled at run time from
+// src/ui/language.c, so the dialog never shows a language other than the
+// one the user selected. Dialog units keep the layout correct at any DPI.
+//
+
+IDD_SETTINGS DIALOGEX 0, 0, 477, 299
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+EXSTYLE WS_EX_APPWINDOW
+CAPTION ""
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_STATUS, 8, 6, 461, 13, SS_LEFT
+    GROUPBOX        "", IDC_GROUP_TEST, 7, 21, 237, 272
+    CONTROL         "", IDC_FILTER_AUTO, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 29, 44, 10
+    CONTROL         "", IDC_FILTER_LEFT, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 62, 29, 40, 10
+    CONTROL         "", IDC_FILTER_MIDDLE, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 104, 29, 40, 10
+    CONTROL         "", IDC_FILTER_RIGHT, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 146, 29, 40, 10
+    LTEXT           "", IDC_FILTER_HINT, 14, 40, 224, 9, SS_LEFT | SS_ENDELLIPSIS
+    CONTROL         "", IDC_RIPPLE, "Static", SS_OWNERDRAW, 13, 51, 225, 236
+    GROUPBOX        "", IDC_GROUP_STATS, 248, 21, 222, 68
+    LTEXT           "", IDC_STATS, 254, 29, 210, 9, SS_LEFT | SS_ENDELLIPSIS
+    LTEXT           "", IDC_BLOCKLOG_HDR, 255, 39, 208, 9
+    EDITTEXT        IDC_BLOCKLOG, 254, 49, 210, 34, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+    GROUPBOX        "", IDC_GROUP_LOG, 248, 94, 222, 117
+    LTEXT           "", IDC_TESTLOG_HDR, 255, 102, 208, 9
+    EDITTEXT        IDC_TESTLOG, 254, 112, 210, 93, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+    GROUPBOX        "", IDC_GROUP_DIAG, 248, 216, 222, 55
+    LTEXT           "", IDC_DIAGHINT, 254, 224, 208, 9
+    EDITTEXT        IDC_DIAG, 254, 234, 210, 31, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "", IDC_REFRESH, 248, 277, 46, 16
+    PUSHBUTTON      "", IDC_CLEAR, 298, 277, 58, 16
+    PUSHBUTTON      "", IDC_OPEN_LOG, 360, 277, 60, 16
+    DEFPUSHBUTTON   "", IDC_CLOSE, 424, 277, 46, 16
+END
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// About window
+//
+// Same rule as the check-up window: every caption is filled at run time so the
+// dialog can never show a language the user did not pick.
+//
+
+IDD_ABOUT DIALOGEX 0, 0, 300, 292
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    CONTROL         "", IDC_ABOUT_ICON, "Static", SS_ICON, 14, 14, 32, 32
+    LTEXT           "", IDC_ABOUT_TITLE, 56, 14, 230, 14, SS_LEFT
+    LTEXT           "", IDC_ABOUT_VERSION, 56, 31, 230, 9, SS_LEFT
+    LTEXT           "", IDC_ABOUT_DESC, 14, 56, 272, 40, SS_LEFT
+    LTEXT           "", IDC_ABOUT_FEATURES, 14, 102, 272, 104, SS_LEFT
+    LTEXT           "", IDC_ABOUT_LIMITS, 14, 198, 272, 52, SS_LEFT
+    LTEXT           "", IDC_ABOUT_ORIGIN, 14, 255, 272, 9, SS_LEFT | SS_ENDELLIPSIS
+    PUSHBUTTON      "", IDC_ABOUT_WEBSITE, 14, 269, 96, 16
+    DEFPUSHBUTTON   "", IDC_ABOUT_CLOSE, 240, 269, 46, 16
+END
+
+#endif    // Neutral (Default) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+/////////////////////////////////////////////////////////////////////////////
+// German (Germany) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_DEU)
+LANGUAGE LANG_GERMAN, SUBLANG_GERMAN
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE
+BEGIN
+    "#include ""winres.h""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE
+BEGIN
+    "\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+#endif    // German (Germany) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED

@@ -1,0 +1,17 @@
+#pragma once
+
+// Shared assertion helpers for the MouseMend test suites
+
+extern int g_checks;
+extern int g_failures;
+
+#define CHECK(condition)                                            \
+	do                                                              \
+	{                                                               \
+		g_checks++;                                                 \
+		if (!(condition))                                           \
+		{                                                           \
+			g_failures++;                                           \
+			printf("[FAIL] %s:%d: %s\n", __FILE__, __LINE__, #condition); \
+		}                                                           \
+	} while (0)
