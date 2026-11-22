@@ -98,12 +98,16 @@ if (-not $Message) {
     # %B is the whole message. Using %s here silently dropped the body of every
     # commit that had one, which is how two commits ended up on the remote with
     # a subject and nothing else.
-    $Message = (& git log -1 --format='%B').Trim()
+    #
+    # git prints one line per element, so the output has to be joined back with
+    # newlines: passing the array straight into the JSON payload collapsed the
+    # whole message into a single 491 character line.
+    $Message = ((& git log -1 --format='%B') -join "`n").Trim()
     Write-Host 'no -Message given, reusing the full message of the last local commit'
 }
 else {
-    $localSubject = (& git log -1 --format=%s).Trim()
-    $localBody = (& git log -1 --format='%B').Trim()
+    $localSubject = ((& git log -1 --format=%s) -join "`n").Trim()
+    $localBody = ((& git log -1 --format='%B') -join "`n").Trim()
     if ($Message.Trim() -eq $localSubject -and $localBody.Length -gt $localSubject.Length) {
         Write-Host 'warning: -Message is only the subject, but the local commit has a body.' -ForegroundColor Yellow
         Write-Host '         pass no -Message at all to keep the full text.' -ForegroundColor Yellow
