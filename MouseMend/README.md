@@ -126,14 +126,14 @@ from the engine.
   the open window immediately.
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-zh.png" width="430" alt="Check-up window, Chinese UI">
-  <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-en.png" width="430" alt="Check-up window, English UI">
+  <img src="https://fastly.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-zh.png" width="430" alt="Check-up window, Chinese UI">
+  <img src="https://fastly.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-en.png" width="430" alt="Check-up window, English UI">
   <br>
-  <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/tray-menu-zh.png" width="290" alt="Tray menu, Chinese UI">
-  <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/tray-menu-en.png" width="290" alt="Tray menu, English UI">
+  <img src="https://fastly.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/tray-menu-zh.png" width="290" alt="Tray menu, Chinese UI">
+  <img src="https://fastly.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/tray-menu-en.png" width="290" alt="Tray menu, English UI">
   <br>
-  <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/about-zh.png" width="250" alt="About window, Chinese UI">
-  <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/about-en.png" width="250" alt="About window, English UI">
+  <img src="https://fastly.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/about-zh.png" width="250" alt="About window, Chinese UI">
+  <img src="https://fastly.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/about-en.png" width="250" alt="About window, English UI">
   <br>
   <sub>体检窗口 / 托盘菜单与高级子菜单 / 关于窗口（中 · 英）<br>
   check-up window, tray menu with the Advanced submenu, and About — in both languages</sub>

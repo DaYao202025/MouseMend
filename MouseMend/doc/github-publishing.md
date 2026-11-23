@@ -221,9 +221,28 @@ https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots
 实测三张都在 jsDelivr 上返回 200 且 SHA-256 与本地一致，本机直接可访问。
 
 **这个选择的代价，记清楚：**
-- 写死了仓库名 `DaYao202025/MouseMend`。**仓库改名或转移后，这两个 README 里的 3+3 处 URL 必须同步改**，否则图全破。
+- 写死了仓库名 `DaYao202025/MouseMend`。**仓库改名或转移后，这两个 README 里各 6 处 URL 必须同步改**，否则图全破。
 - 依赖第三方 CDN。jsDelivr 对 `@main` 有约 12 小时缓存，换了截图要等缓存过期（或换个文件名）。
 - 别人 fork 出去，图仍然指向本仓库。
+
+**选哪个 host 也有讲究（2026-11-23 实测）：**
+
+| host | 结果 |
+| :--- | :--- |
+| `cdn.jsdelivr.net` | **连接被重置**，连试 5 次全失败（TLS 握手阶段 `Recv failure: Connection was reset`） |
+| `fastly.jsdelivr.net` | 200，6 张图 SHA-256 全部与仓库一致 ← **当前采用** |
+| `gcore.jsdelivr.net` | 200，6 张全部一致 |
+| `testingcf.jsdelivr.net` | 200，但其中一张还返回旧缓存 |
+
+所以 README 里用的是 **`fastly.jsdelivr.net`**，不是官方文档默认的 `cdn.`。**如果哪天 fastly 也被重置，改成 `gcore.` 或 `testingcf.` 即可**（三者内容相同，只是边缘节点不同）。
+
+**换图之后必须清缓存**，否则 `cdn`/`testingcf` 会继续返回旧字节：
+
+```powershell
+Invoke-WebRequest "https://purge.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-zh.png" -UseBasicParsing
+```
+
+实测：purge 之后 `fastly` 与 `gcore` 立即变成新字节，`testingcf` 仍滞后。**核验方式只能是逐个 host 取回来比 SHA-256**，不能只看 HTTP 200。
 
 **如果哪天不需要照顾受限网络了**，改回相对路径即可（`MouseMend/doc/screenshots/xxx.png` / `doc/screenshots/xxx.png`）。
 
