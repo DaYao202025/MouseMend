@@ -28,22 +28,36 @@
      not resolve on networks where that host is blocked, so the pictures were
      showing up as broken alt text for exactly the readers this project is
      published for. jsDelivr serves the same bytes out of the same commit.
-     If the repository is renamed or moved, these three URLs have to follow. -->
+     If the repository is renamed or moved, every URL below has to follow. -->
 <table>
   <tr>
     <td align="center" width="50%">
       <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-zh.png" width="430" alt="鼠标体检窗口（中文）"><br>
-      <sub>鼠标体检 —— 中文界面</sub>
+      <sub>鼠标体检 · check-up window —— 中文</sub>
     </td>
     <td align="center" width="50%">
       <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-en.png" width="430" alt="Mouse check-up window (English)"><br>
-      <sub>Mouse check-up — English UI</sub>
+      <sub>check-up window —— English</sub>
     </td>
   </tr>
   <tr>
-    <td align="center" colspan="2">
-      <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/tray-menu.png" width="230" alt="托盘右键菜单"><br>
-      <sub>托盘图标的右键菜单 / the tray menu</sub>
+    <td align="center" width="50%">
+      <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/tray-menu-zh.png" width="300" alt="托盘菜单与高级子菜单（中文）"><br>
+      <sub>托盘菜单 / 高级子菜单 —— 中文</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/tray-menu-en.png" width="300" alt="Tray menu and Advanced submenu (English)"><br>
+      <sub>tray menu / Advanced —— English</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/about-zh.png" width="250" alt="关于窗口（中文）"><br>
+      <sub>关于窗口 —— 中文</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="https://cdn.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/about-en.png" width="250" alt="About window (English)"><br>
+      <sub>about window —— English</sub>
     </td>
   </tr>
 </table>
