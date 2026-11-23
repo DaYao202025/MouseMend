@@ -128,6 +128,35 @@ static bool release_deferred_button(DebounceManager *manager, int button, bool f
 	return true;
 }
 
+// Stable, language independent name of a verdict
+const char *debounce_reason_slug(DebounceReason reason)
+{
+	switch (reason)
+	{
+	case DEBOUNCE_REASON_BLOCK_THRESHOLD:
+		return "blocked-threshold";
+	case DEBOUNCE_REASON_BLOCK_DEFERRING:
+		return "blocked-deferring";
+	case DEBOUNCE_REASON_BLOCK_RELEASE:
+		return "blocked-release";
+	case DEBOUNCE_REASON_BLOCK_WHEEL_REVERSAL:
+		return "blocked-wheel-reversal";
+	case DEBOUNCE_REASON_DEFER_RELEASE:
+		return "deferred-release";
+	case DEBOUNCE_REASON_PASS_FLUSHED:
+		return "passed-flushed";
+	case DEBOUNCE_REASON_IGNORE_INJECTED:
+		return "ignored-injected";
+	case DEBOUNCE_REASON_IGNORE_UNMONITORED:
+		return "ignored-unmonitored";
+	case DEBOUNCE_REASON_IGNORE_WHEEL_ZERO:
+		return "ignored-wheel-zero";
+	case DEBOUNCE_REASON_PASS:
+	default:
+		return "passed";
+	}
+}
+
 // Whether a decision describes a false click a user would care about
 bool debounce_decision_is_false_click(const DebounceDecision *decision)
 {

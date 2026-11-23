@@ -625,7 +625,12 @@ static void update_filter_ui(HWND hDlg, SettingsWindow *window, bool reset_view)
 // Apply the localized texts
 static void apply_language(HWND hDlg)
 {
-	SetWindowTextW(hDlg, lang_str(STR_SETTINGS_TITLE));
+	// The caption carries the version, so it is formatted rather than looked up:
+	// one bump in version.h renames the title bar, the taskbar button and the
+	// Alt+Tab entry at once.
+	wchar_t title[LANG_TITLE_MAX_CHARS];
+	lang_format_settings_title(title, ARRAYSIZE(title));
+	SetWindowTextW(hDlg, title);
 
 	SetDlgItemTextW(hDlg, IDC_GROUP_TEST, lang_str(STR_GROUP_TEST));
 	SetDlgItemTextW(hDlg, IDC_GROUP_LOG, lang_str(STR_GROUP_LOG));

@@ -134,6 +134,13 @@ typedef enum
 	STR_TRAY_BALLOON_TEXT,
 	STR_SETTINGS_UNAVAILABLE,
 
+	// Support bundle: menu entry, the two outcomes and the notice shown on the
+	// first start after a crash
+	STR_EXPORT_SUPPORT,
+	STR_EXPORT_SUPPORT_DONE_FMT,
+	STR_EXPORT_SUPPORT_FAILED,
+	STR_CRASH_REPORT_FOUND_FMT,
+
 	STR_COUNT
 } LangStringId;
 
@@ -168,7 +175,7 @@ const wchar_t *lang_format_blocked_button(wchar_t *buffer, size_t buffer_count,
 										  MouseButton button, uint32_t blocks);
 
 // Compose the tray hover text:
-//   MouseMend 2.0.0
+//   MouseMend <version>
 //   Protection enabled - 7/7 buttons
 //   12 false clicks blocked
 // Parameters:
@@ -178,6 +185,16 @@ const wchar_t *lang_format_blocked_button(wchar_t *buffer, size_t buffer_count,
 //   hook_active - Whether the mouse hook is installed
 void lang_format_tooltip(wchar_t *buffer, size_t buffer_count,
 						 int monitored, int total, uint32_t blocked, bool hook_active);
+
+// Longest possible caption plus room for a version string
+#define LANG_TITLE_MAX_CHARS 96
+
+// Compose the check-up window caption, e.g. "MouseMend v<version> —— 鼠标体检修复工具"
+//
+// The version is taken from version.h at run time, so bumping APP_VERSION_STRING
+// updates the caption in every language without touching the translations and
+// without a chance of the number drifting away from the executable's resources.
+void lang_format_settings_title(wchar_t *buffer, size_t buffer_count);
 
 // Build a localized "value + unit" label, e.g. "50 ms" / "50 毫秒"
 const wchar_t *lang_format_ms(int value);

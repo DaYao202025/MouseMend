@@ -19,6 +19,7 @@
 #define IDM_TOGGLE_LOG (WM_USER + 16)
 #define IDM_OPEN_SETTINGS (WM_USER + 17)
 #define IDM_OPEN_LOG_FOLDER (WM_USER + 18)
+#define IDM_EXPORT_SUPPORT (WM_USER + 19)
 
 // Application private messages
 // Posted from the mouse hook callback so the balloon is composed outside the

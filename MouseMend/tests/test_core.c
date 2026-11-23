@@ -16,10 +16,14 @@
 #include "../src/core/event_trace.h"
 #include "../src/core/mouse_hook.h"
 #include "../src/core/notify_policy.h"
+#include "../src/core/event_history.h"
 #include "../src/ui/language.h"
 #include "../src/ui/log_format.h"
+#include "../src/utils/support_bundle.h"
+#include "../src/utils/zip_writer.h"
 #include "../src/ui/ripple_view.h"
 #include "../src/ui/tray_icon.h"
+#include "../src/ui/window_layout.h"
 
 int g_checks = 0;
 int g_failures = 0;
@@ -214,6 +218,31 @@ static void test_language_tables(void)
 	language_set(LANG_ZH_CN);
 	CHECK(wcscmp(english_exit, lang_str(STR_EXIT)) != 0);
 	CHECK(wcscmp(english_enable, lang_str(STR_ENABLE)) != 0);
+
+	// The caption carries the version, which comes from version.h rather than
+	// from the translation table. If that wiring ever breaks, the title bar shows
+	// a stale number while the executable's resources show the new one.
+	wchar_t title[LANG_TITLE_MAX_CHARS];
+
+	language_set(LANG_EN);
+	lang_format_settings_title(title, ARRAYSIZE(title));
+	CHECK(wcsstr(title, APP_VERSION_STRING_W) != NULL);
+	CHECK(wcsstr(title, APP_NAME_W) != NULL);
+	CHECK(wcslen(title) < LANG_TITLE_MAX_CHARS - 1);
+
+	language_set(LANG_ZH_CN);
+	lang_format_settings_title(title, ARRAYSIZE(title));
+	CHECK(wcsstr(title, APP_VERSION_STRING_W) != NULL);
+	CHECK(wcsstr(title, APP_NAME_W) != NULL);
+	CHECK(wcsstr(title, L"\u2014") != NULL);
+	CHECK(wcslen(title) < LANG_TITLE_MAX_CHARS - 1);
+
+	// A truncated destination must still produce a terminated string, never a
+	// half written version number. The variable is not called "small" because
+	// rpcndr.h still defines that as char for MIDL compatibility.
+	wchar_t narrow[16];
+	lang_format_settings_title(narrow, ARRAYSIZE(narrow));
+	CHECK(wcslen(narrow) < ARRAYSIZE(narrow));
 
 	// Out-of-range access must not crash and must return an empty string
 	CHECK(lang_str((LangStringId)STR_COUNT) != NULL);
@@ -1202,6 +1231,189 @@ static void test_snapshot_fill(void)
 	debounce_cleanup(&manager);
 }
 
+// The support report is written by a process that may already be dying, so the
+// two pieces that can silently go wrong are tested directly: the checksum (a
+// wrong table produces an archive no tool will open) and the event ring.
+static void test_zip_writer(void)
+{
+	printf("zip writer\n");
+
+	// "123456789" is the published CRC-32 test vector. Round tripping through
+	// our own writer would pass even with a broken table, because both sides
+	// would be wrong in the same way.
+	CHECK(zip_crc32("123456789", 9) == 0xCBF43926u);
+
+	uint32_t streamed = zip_crc32_start();
+	streamed = zip_crc32_update(streamed, "1234", 4);
+	streamed = zip_crc32_update(streamed, "56789", 5);
+	CHECK(zip_crc32_finish(streamed) == 0xCBF43926u);
+
+	// The empty input checksum of a real CRC is zero, not 0xFFFFFFFF
+	CHECK(zip_crc32(NULL, 0) == 0x00000000u);
+
+	wchar_t directory[MAX_PATH];
+	GetTempPathW(ARRAYSIZE(directory), directory);
+
+	wchar_t path[MAX_PATH];
+	StringCchPrintfW(path, ARRAYSIZE(path), L"%smm-zip-test-%u.zip",
+					 directory, (unsigned)GetCurrentProcessId());
+
+	ZipWriter writer;
+	CHECK(zip_begin(&writer, path) == true);
+	CHECK(zip_add_bytes(&writer, "a.txt", "hello", 5) == true);
+	CHECK(zip_add_bytes(&writer, "b.txt", "world!", 6) == true);
+	CHECK(zip_end(&writer) == true);
+
+	// The end of central directory record is what every extractor looks for
+	HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+							  OPEN_EXISTING, 0, NULL);
+	CHECK(file != INVALID_HANDLE_VALUE);
+
+	LARGE_INTEGER size;
+	CHECK(GetFileSizeEx(file, &size) != 0);
+	CHECK(size.QuadPart > 22);
+
+	LARGE_INTEGER tail_offset;
+	tail_offset.QuadPart = size.QuadPart - 22;
+	CHECK(SetFilePointerEx(file, tail_offset, NULL, FILE_BEGIN) != 0);
+
+	unsigned char tail[22];
+	DWORD read = 0;
+	CHECK(ReadFile(file, tail, sizeof(tail), &read, NULL) != 0);
+	CHECK(read == sizeof(tail));
+	CHECK(tail[0] == 0x50 && tail[1] == 0x4B && tail[2] == 0x05 && tail[3] == 0x06);
+	CHECK(tail[8] == 2);  // entries on this disk
+	CHECK(tail[10] == 2); // entries in total
+	CHECK(tail[12] != 0); // central directory size, so it is not an empty archive
+
+	CloseHandle(file);
+	CHECK(DeleteFileW(path) != 0);
+
+	// A path that cannot be created must report failure instead of pretending
+	ZipWriter unusable;
+	CHECK(zip_begin(&unusable, L"?:\\nowhere\\x.zip") == false);
+	CHECK(zip_add_bytes(&unusable, "a.txt", "x", 1) == false);
+	CHECK(zip_end(&unusable) == false);
+}
+
+static void test_event_history(void)
+{
+	printf("event history\n");
+
+	EventHistory history;
+	CHECK(event_history_init(&history) == true);
+
+	TraceEntry entry;
+	memset(&entry, 0, sizeof(entry));
+
+	TraceEntry out[8];
+	CHECK(event_history_copy(&history, out, ARRAYSIZE(out)) == 0);
+
+	for (int i = 0; i < 5; i++)
+	{
+		entry.timestamp = (uint64_t)(i + 1);
+		event_history_push(&history, &entry);
+	}
+
+	uint32_t copied = event_history_copy(&history, out, ARRAYSIZE(out));
+	CHECK(copied == 5);
+	CHECK(out[0].timestamp == 5); // newest first
+	CHECK(out[4].timestamp == 1);
+
+	// Past the capacity the newest survive and the ring stays bounded
+	const int overflow = EVENT_HISTORY_CAPACITY * 2;
+	for (int i = 0; i < overflow; i++)
+	{
+		entry.timestamp = (uint64_t)(1000 + i);
+		event_history_push(&history, &entry);
+	}
+
+	copied = event_history_copy(&history, out, ARRAYSIZE(out));
+	CHECK(copied == ARRAYSIZE(out));
+	CHECK(out[0].timestamp == (uint64_t)(1000 + overflow - 1));
+
+	// A destination smaller than the ring keeps the newest, never the oldest
+	TraceEntry single;
+	CHECK(event_history_copy(&history, &single, 1) == 1);
+	CHECK(single.timestamp == (uint64_t)(1000 + overflow - 1));
+
+	event_history_clear(&history);
+	CHECK(event_history_copy(&history, out, ARRAYSIZE(out)) == 0);
+
+	event_history_cleanup(&history);
+
+	// After cleanup the ring must refuse to be read rather than touch a lock
+	// that no longer exists
+	CHECK(event_history_copy(&history, out, ARRAYSIZE(out)) == 0);
+}
+
+static void test_support_report(void)
+{
+	printf("support report\n");
+
+	SupportReport report;
+	support_bundle_prepare(&report, true);
+
+	CHECK(report.crashed == true);
+	CHECK(report.complete == true);
+	CHECK(report.now_tick > 0);
+	CHECK(report.exe_path[0] != L'\0');
+	CHECK(report.arch[0] != L'\0');
+	CHECK(report.stamp[0] != L'\0');
+
+	report.exception_code = 0xC0000005;
+	report.exception_address = 0;
+
+	// No events: the section has to say so instead of printing a bare header
+	// Static because the report is 24 KB and this is a test, not the crash path
+	static char text[SUPPORT_TEXT_MAX];
+	CHECK(support_bundle_build_text(&report, text, sizeof(text)) == true);
+	CHECK(strstr(text, APP_VERSION_STRING) != NULL);
+	CHECK(strstr(text, "0xC0000005") != NULL);
+	CHECK(strstr(text, "exception") != NULL);
+	CHECK(strstr(text, "none recorded") != NULL);
+
+	// A wide string handed to a narrow "%s" is read as ANSI and stops at the
+	// first embedded NUL, which silently truncates a timestamp to one character.
+	// Length is what catches that; "2026-11-23 10:21:25" plus its label is 33.
+	const char *generated_line = strstr(text, "generated   : ");
+	CHECK(generated_line != NULL);
+	CHECK(generated_line != NULL && strlen(generated_line) > 30);
+
+	// A blocked press and a pass, which must not read the same
+	memset(report.events, 0, sizeof(report.events));
+	report.event_count = 2;
+
+	report.events[0].button = MOUSE_BUTTON_LEFT;
+	report.events[0].timestamp = report.now_tick;
+	report.events[0].is_down = true;
+	report.events[0].decision.reason = DEBOUNCE_REASON_BLOCK_THRESHOLD;
+	report.events[0].decision.blocked = true;
+	report.events[0].decision.threshold_ms = 40;
+	report.events[0].decision.elapsed_ms = 12;
+
+	report.events[1].button = MOUSE_BUTTON_LEFT;
+	report.events[1].timestamp = report.now_tick;
+	report.events[1].decision.reason = DEBOUNCE_REASON_PASS;
+
+	CHECK(support_bundle_build_text(&report, text, sizeof(text)) == true);
+	CHECK(strstr(text, "blocked-threshold") != NULL);
+	CHECK(strstr(text, "passed") != NULL);
+	CHECK(strstr(text, "left") != NULL);
+	CHECK(strstr(text, "none recorded") == NULL);
+
+	// Every verdict needs its own name: a report that cannot tell them apart is
+	// as useless as no report at all
+	for (int a = 0; a < DEBOUNCE_REASON_COUNT; a++)
+	{
+		for (int b = a + 1; b < DEBOUNCE_REASON_COUNT; b++)
+		{
+			CHECK(strcmp(debounce_reason_slug((DebounceReason)a),
+						 debounce_reason_slug((DebounceReason)b)) != 0);
+		}
+	}
+}
+
 // The log panes and their rendering used to live inside the check-up window and
 // therefore had no test coverage at all: the test project does not compile a
 // file that needs a message loop. log_format.c has no window, so the text a
@@ -1321,6 +1533,96 @@ static void test_log_format(void)
 	memset(snapshot.evidence, 0, sizeof(snapshot.evidence));
 	log_format_evidence(&snapshot, text, ARRAYSIZE(text));
 	CHECK(wcsstr(text, lang_str(STR_EVIDENCE_NONE)) != NULL);
+
+	// A recorded false click has to render, not crash.
+	//
+	// This is the block that killed the program in the field: the "engine judged
+	// by" line used %s while the call site passed the millisecond count, so printf
+	// read the number as a string pointer and walked into that address. Only the
+	// empty evidence case was ever exercised here, which is why nothing caught it.
+	AppBlockEvidence *left = &snapshot.evidence[MOUSE_BUTTON_LEFT];
+	left->valid = true;
+	left->timestamp = snapshot.now_tick;
+	left->elapsed_ms = 46;      // the value that was dereferenced as a pointer
+	left->has_press_gap = true;
+	left->press_gap_ms = 120;   // differs from elapsed_ms, so the extra line prints
+	left->threshold_ms = 40;
+	left->blocks = 3;
+
+	log_format_evidence(&snapshot, text, ARRAYSIZE(text));
+	CHECK(wcsstr(text, lang_button_name(MOUSE_BUTTON_LEFT)) != NULL);
+	CHECK(wcsstr(text, lang_str(STR_EVIDENCE_NONE)) == NULL);
+
+	// The engine line must carry the number, printed as a number
+	wchar_t expected_engine[80];
+	StringCchPrintfW(expected_engine, ARRAYSIZE(expected_engine),
+					 lang_str(STR_EVIDENCE_ENGINE_FMT), 46u);
+	CHECK(wcsstr(text, expected_engine) != NULL);
+
+	// And the format must stay numeric. Comparing the two translations catches a
+	// drift between them but not a mismatch with the call site, which is exactly
+	// how this survived the existing tests.
+	char engine_shape[24];
+	Language before = language_get();
+
+	for (int pass = 0; pass < 2; pass++)
+	{
+		language_set(pass == 0 ? LANG_EN : LANG_ZH_CN);
+		placeholder_signature(lang_str(STR_EVIDENCE_ENGINE_FMT), engine_shape,
+							  ARRAYSIZE(engine_shape));
+		CHECK(strcmp(engine_shape, "n") == 0);
+	}
+
+	language_set(before);
+}
+
+// The window is centred in the work area, and a work area smaller than the
+// window must not push the title bar off screen: that is what happens on a small
+// display or at a high scaling factor, and an off-screen title bar cannot be
+// grabbed at all.
+static void test_window_layout(void)
+{
+	printf("window layout\n");
+
+	RECT work = {0, 0, 1920, 1040};
+	POINT position;
+
+	window_layout_center(800, 600, &work, &position);
+	CHECK(position.x == 560); // (1920 - 800) / 2
+	CHECK(position.y == 220); // (1040 - 600) / 2
+
+	// An odd remainder rounds towards the top left, never past it
+	window_layout_center(801, 601, &work, &position);
+	CHECK(position.x == 559);
+	CHECK(position.y == 219);
+
+	// A work area that does not start at the origin keeps its own offset
+	RECT offset = {1920, 0, 3200, 1000};
+	window_layout_center(800, 600, &offset, &position);
+	CHECK(position.x == 1920 + 240);
+	CHECK(position.y == 200);
+
+	// Too wide and too tall: pinned, not pushed to a negative coordinate
+	window_layout_center(2000, 1200, &work, &position);
+	CHECK(position.x == 0);
+	CHECK(position.y == 0);
+
+	// Only one axis fits: the other is still centred
+	window_layout_center(2000, 600, &work, &position);
+	CHECK(position.x == 0);
+	CHECK(position.y == 220);
+
+	// Exactly the size of the work area counts as "does not fit"
+	window_layout_center(1920, 1040, &work, &position);
+	CHECK(position.x == 0);
+	CHECK(position.y == 0);
+
+	// Degenerate input must leave the result untouched instead of crashing
+	position.x = 7;
+	position.y = 9;
+	window_layout_center(800, 600, NULL, &position);
+	CHECK(position.x == 7);
+	CHECK(position.y == 9);
 }
 
 // The log panes are padded with spaces instead of tab stops, which only lines
@@ -1466,6 +1768,10 @@ int main(void)
 	test_event_trace();
 	test_ripple_view();
 	test_snapshot_fill();
+	test_event_history();
+	test_zip_writer();
+	test_support_report();
+	test_window_layout();
 	test_checkup_formats();
 
 	printf("\n%d checks, %d failures\n", g_checks, g_failures);

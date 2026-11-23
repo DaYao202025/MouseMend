@@ -39,6 +39,11 @@ __pycache__/
 *.so
 *.egg-info/
 
+# Runtime output: the blocked-click history and the crash dumps land here, and a
+# minidump carries raw stack memory. Never commit one by accident.
+Log/
+*.dmp
+
 # Temporary files
 *.tmp
 *.temp

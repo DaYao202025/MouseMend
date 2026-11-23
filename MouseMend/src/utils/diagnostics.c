@@ -77,7 +77,7 @@ static void emit(const wchar_t *text)
 	MessageBoxW(NULL, text, APP_NAME_W, MB_OK | MB_ICONINFORMATION);
 }
 
-// Build the "MouseMend 2.0.0 (x64)" banner
+// Build the "MouseMend <version> (x64)" banner
 // Plain ASCII on purpose: the report is read through a pipe, and a non-ASCII
 // name would arrive as mojibake in a Windows PowerShell console.
 static void build_banner(wchar_t *buffer, size_t buffer_count)

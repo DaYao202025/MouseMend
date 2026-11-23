@@ -248,9 +248,18 @@ void log_format_evidence(const AppSnapshot *snapshot, wchar_t *buffer, size_t bu
 
 		if (evidence->has_press_gap && evidence->elapsed_ms != gap_ms)
 		{
+			// The argument is a duration, and the format says so: passing it to a
+			// %s made printf read the millisecond count as a string pointer and
+			// walk into address 0x2E. Keep the two in step - the translation test
+			// only compares the two languages with each other, so it cannot see a
+			// mismatch between a format and its call site.
+			unsigned engine_ms = (evidence->elapsed_ms > 999999)
+									 ? 999999u
+									 : (unsigned)evidence->elapsed_ms;
+
 			wchar_t engine[64];
 			StringCchPrintfW(engine, ARRAYSIZE(engine), lang_str(STR_EVIDENCE_ENGINE_FMT),
-							 (int)evidence->elapsed_ms);
+							 engine_ms);
 			StringCchCatW(buffer, buffer_count, engine);
 		}
 

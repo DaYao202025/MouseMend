@@ -35,7 +35,7 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_LOG_BLOCKS] = L"Save blocked clicks to a file",
 	[STR_OPEN_LOG_FOLDER] = L"Open history folder",
 	[STR_OPEN_SETTINGS] = L"Check-up...",
-	[STR_SETTINGS_TITLE] = L"Mouse check-up",
+	[STR_SETTINGS_TITLE] = L"MouseMend v%s \u2014 Mouse Check-up Repair Tool",
 	[STR_GROUP_STATS] = L"Blocked false clicks",
 	[STR_GROUP_TEST] = L"Click test",
 	[STR_GROUP_DIAG] = L"Self check",
@@ -112,7 +112,7 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_EVIDENCE_HEADER] = L"--- suspected false clicks ---",
 	[STR_EVIDENCE_NONE] = L"No suspicious click so far.",
 	[STR_EVIDENCE_FMT] = L"%s: %I32u in total, previous %s, latest %s, gap %s, limit %s",
-	[STR_EVIDENCE_ENGINE_FMT] = L" (engine judged by %s)",
+	[STR_EVIDENCE_ENGINE_FMT] = L" (engine judged by %I32u ms)",
 
 	[STR_ABOUT_VERSION_FMT] = L"Version %s",
 	[STR_ABOUT_ORIGIN_FMT] = L"started from %s",
@@ -146,6 +146,11 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_TRAY_BALLOON_TITLE] = L"Sent to the tray",
 	[STR_TRAY_BALLOON_TEXT] = L"MouseMend keeps protecting your mouse in the background. Double-click the tray icon to open this window again.",
 	[STR_SETTINGS_UNAVAILABLE] = L"The check-up window could not be opened. Right-click the tray icon and pick it from the menu; if that fails too, restart the program.",
+
+	[STR_EXPORT_SUPPORT] = L"Export diagnostics...",
+	[STR_EXPORT_SUPPORT_DONE_FMT] = L"Diagnostics saved to:\n%s\n\nSend this file to the author.",
+	[STR_EXPORT_SUPPORT_FAILED] = L"Could not write the file: no folder was writable. Move MouseMend somewhere else (for example D:\\ or your desktop) and try again.",
+	[STR_CRASH_REPORT_FOUND_FMT] = L"The program closed unexpectedly last time.\nA report was saved to:\n%s\n\nPlease send it to the author.",
 };
 
 // Simplified Chinese strings
@@ -175,7 +180,7 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_LOG_BLOCKS] = L"把拦截记录保存成文件",
 	[STR_OPEN_LOG_FOLDER] = L"打开历史记录目录",
 	[STR_OPEN_SETTINGS] = L"鼠标体检…",
-	[STR_SETTINGS_TITLE] = L"鼠标体检",
+	[STR_SETTINGS_TITLE] = L"MouseMend v%s —— 鼠标体检修复工具",
 	[STR_GROUP_STATS] = L"已拦截的误触",
 	[STR_GROUP_TEST] = L"测试区",
 	[STR_GROUP_DIAG] = L"自检",
@@ -252,7 +257,7 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_EVIDENCE_HEADER] = L"—— 疑似误触证据 ——",
 	[STR_EVIDENCE_NONE] = L"目前没有发现疑似误触。",
 	[STR_EVIDENCE_FMT] = L"%s：累计 %I32u 次，上次 %s，本次 %s，间隔 %s，阈值 %s",
-	[STR_EVIDENCE_ENGINE_FMT] = L"（引擎按 %s 判定）",
+	[STR_EVIDENCE_ENGINE_FMT] = L"（引擎按 %I32u 毫秒判定）",
 
 	[STR_ABOUT_VERSION_FMT] = L"版本 %s",
 	[STR_ABOUT_ORIGIN_FMT] = L"源自 %s",
@@ -286,6 +291,11 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_TRAY_BALLOON_TITLE] = L"已收进托盘图标",
 	[STR_TRAY_BALLOON_TEXT] = L"MouseMend 仍在后台保护鼠标。双击托盘图标，可以再打开这个窗口。",
 	[STR_SETTINGS_UNAVAILABLE] = L"体检窗口打不开。请右键托盘图标从菜单里选一次；如果还是打不开，请重启程序。",
+
+	[STR_EXPORT_SUPPORT] = L"导出诊断报告…",
+	[STR_EXPORT_SUPPORT_DONE_FMT] = L"诊断包已保存到：\n%s\n\n请把这个文件发给作者。",
+	[STR_EXPORT_SUPPORT_FAILED] = L"导出失败：没有可写的文件夹。请把程序挪到别处（比如 D 盘或桌面）再试一次。",
+	[STR_CRASH_REPORT_FOUND_FMT] = L"上次程序异常退出了。\n诊断包已保存到：\n%s\n\n请把它发给作者。",
 };
 
 // Button names, indexed by MouseButton
@@ -472,6 +482,16 @@ const wchar_t *lang_format_blocked_button(wchar_t *buffer, size_t buffer_count,
 					 lang_button_name(button), blocks);
 
 	return buffer;
+}
+
+// Compose the check-up window caption
+void lang_format_settings_title(wchar_t *buffer, size_t buffer_count)
+{
+	if (!buffer || buffer_count == 0)
+		return;
+
+	buffer[0] = L'\0';
+	StringCchPrintfW(buffer, buffer_count, lang_str(STR_SETTINGS_TITLE), APP_VERSION_STRING_W);
 }
 
 // Compose the tray hover text

@@ -28,6 +28,7 @@
 #include "src/core/app_controller.h"
 #include "src/core/app_snapshot.h"
 #include "src/core/event_trace.h"
+#include "src/core/event_history.h"
 #include "src/core/block_log.h"
 #include "src/core/hook_watchdog.h"
 #include "src/ui/tray_icon.h"
@@ -40,6 +41,7 @@
 #include "src/utils/crash_dump.h"
 #include "src/utils/diagnostics.h"
 #include "src/utils/logger.h"
+#include "src/utils/support_bundle.h"
 
 // Global application state
 typedef struct
@@ -81,6 +83,11 @@ typedef struct
 	// Decisions the engine made, shown by the check-up window
 	EventTrace trace;
 	AppBlockEvidence evidence[MOUSE_BUTTON_COUNT];
+
+	// The same decisions, recorded regardless of the window: this is the only
+	// history a crash report can still show when the user was working elsewhere.
+	EventHistory history;
+	uint64_t start_tick;
 
 	// Hook health
 	WatchdogState watchdog;
@@ -225,6 +232,10 @@ static LRESULT CALLBACK OnMouseHookCallback(const MouseEvent *event, void *user_
 		entry.is_down = event->is_down;
 		entry.decision = decision;
 		event_trace_push(&app->trace, &entry);
+
+		// Always on, unlike the trace above: a crash report has to describe what
+		// the user was doing even when that was outside the check-up window.
+		event_history_push(&app->history, &entry);
 	}
 
 	// Evidence for the self check. Only a press the engine refused counts, and
@@ -412,6 +423,142 @@ static void BuildLogPath(wchar_t *path, size_t path_count)
 	StringCchCopyW(path, path_count, LOG_FILE_NAME);
 }
 
+// ------------------------------------------------------------ support bundle
+
+// Registry value remembering which crash report the user was already told about,
+// so the notice appears once per crash and not on every start
+#define REG_VALUE_LAST_CRASH L"LastCrashNotice"
+
+static void ReadLastCrashNotice(wchar_t *buffer, size_t buffer_count)
+{
+	if (!buffer || buffer_count == 0)
+		return;
+
+	buffer[0] = L'\0';
+
+	HKEY key = NULL;
+	if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_SETTINGS_KEY, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+		return;
+
+	DWORD type = 0;
+	DWORD bytes = (DWORD)(buffer_count * sizeof(wchar_t));
+	LONG result = RegQueryValueExW(key, REG_VALUE_LAST_CRASH, NULL, &type,
+								   (LPBYTE)buffer, &bytes);
+	RegCloseKey(key);
+
+	if (result != ERROR_SUCCESS || type != REG_SZ)
+	{
+		buffer[0] = L'\0';
+		return;
+	}
+
+	// A value truncated by the registry would not be terminated
+	buffer[buffer_count - 1] = L'\0';
+}
+
+static void WriteLastCrashNotice(const wchar_t *value)
+{
+	if (!value)
+		return;
+
+	HKEY key = NULL;
+	if (RegCreateKeyExW(HKEY_CURRENT_USER, REG_SETTINGS_KEY, 0, NULL, 0,
+						KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS)
+		return;
+
+	RegSetValueExW(key, REG_VALUE_LAST_CRASH, 0, REG_SZ,
+				   (const BYTE *)value, (DWORD)((wcslen(value) + 1) * sizeof(wchar_t)));
+	RegCloseKey(key);
+}
+
+// Copy the live state into a report.
+//
+// The engine fields are read without their critical section on purpose: this is
+// also called from the crash handler, where the lock may be held by a thread
+// that no longer exists. A value read a few instructions late is harmless; a
+// report that waits forever is not a report.
+static void CollectSupportReport(SupportReport *report)
+{
+	if (!report)
+		return;
+
+	// "not a crash" by default; the crash handler flips this after collecting
+	support_bundle_prepare(report, false);
+	report->app_start_tick = g_app.start_tick;
+
+	StringCchCopyW(report->language, ARRAYSIZE(report->language),
+				   (language_get() == LANG_ZH_CN) ? L"zh-CN" : L"en");
+
+	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
+	{
+		report->thresholds[i] = g_app.debounce.buttons[i].thresholdMs;
+		report->monitored[i] = g_app.debounce.buttons[i].isMonitored;
+		report->blocks[i] = g_app.debounce.buttons[i].blocks;
+		report->total_blocks += report->blocks[i];
+	}
+
+	report->hybrid = g_app.debounce.use_hybrid_heuristic;
+	report->release_delay_ms = g_app.debounce.releaseDelayMs;
+	report->drag_distance_px = g_app.debounce.dragDistancePx;
+
+	report->notify_blocks = g_app.prefs.notify_blocks;
+	report->log_blocks = g_app.prefs.log_blocks;
+	StringCchCopyW(report->log_directory, ARRAYSIZE(report->log_directory), g_app.log_directory);
+
+	report->hook_active = IsHookActive();
+	report->hook_events = g_app.hook_events;
+	report->hook_recoveries = g_app.hook_recoveries;
+
+	report->event_count = event_history_copy(&g_app.history, report->events, SUPPORT_EVENT_MAX);
+}
+
+// Build one bundle from the menu and tell the user where it landed
+static void ExportSupportBundle(void)
+{
+	// Static: the report is ~10 KB and the crash path must not touch the stack
+	// more than it has to.
+	static SupportReport report;
+
+	CollectSupportReport(&report);
+
+	wchar_t path[MAX_PATH];
+	bool written = support_bundle_write(&report, NULL, path, ARRAYSIZE(path));
+
+	if (!written)
+	{
+		MessageBoxW(g_app.hWnd, lang_str(STR_EXPORT_SUPPORT_FAILED), APP_NAME_W,
+					MB_OK | MB_ICONWARNING);
+		return;
+	}
+
+	wchar_t text[TRAY_BALLOON_MAX_CHARS * 2];
+	StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_EXPORT_SUPPORT_DONE_FMT), path);
+	MessageBoxW(g_app.hWnd, text, APP_NAME_W, MB_OK | MB_ICONINFORMATION);
+}
+
+// Tell the user, once, that the previous run left a report behind
+static void NotifyPreviousCrash(void)
+{
+	wchar_t path[MAX_PATH];
+	if (!support_bundle_find_newest(SUPPORT_PREFIX_CRASH, path, ARRAYSIZE(path)))
+		return;
+
+	wchar_t notified[MAX_PATH];
+	ReadLastCrashNotice(notified, ARRAYSIZE(notified));
+
+	if (notified[0] != L'\0' && wcscmp(notified, path) == 0)
+		return;
+
+	WriteLastCrashNotice(path);
+
+	if (!g_app.tray_ready)
+		return;
+
+	wchar_t text[TRAY_BALLOON_MAX_CHARS * 2];
+	StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_CRASH_REPORT_FOUND_FMT), path);
+	tray_icon_show_balloon(&g_app.tray_icon, APP_NAME_W, text, NIIF_INFO);
+}
+
 // Initialize application
 static bool InitializeApp(void)
 {
@@ -441,6 +588,11 @@ static bool InitializeApp(void)
 
 	// Decision ring for the check-up window (plain memory, no IO)
 	event_trace_init(&g_app.trace);
+
+	// The same decisions, kept for the support report even when the window is
+	// closed or the user clicks outside the test area.
+	event_history_init(&g_app.history);
+	g_app.start_tick = GetTickCount64();
 
 	// Attach the controller before the first preset is applied: every mutation
 	// goes through it, so applying a preset earlier would silently do nothing.
@@ -526,6 +678,11 @@ static bool InitializeApp(void)
 #endif
 		return false;
 	}
+
+	// If the previous run died, the report it left behind is the only way the
+	// user will ever find it: the folder it lands in is not one he would search.
+	// Shown once per file, so a crash loop does not turn into a balloon loop.
+	NotifyPreviousCrash();
 
 	// The check-up window opens on every start: until now the application was
 	// invisible until the user found the tray icon, which made a working program
@@ -681,6 +838,7 @@ static void ShutdownApp(void)
 	}
 
 	event_trace_cleanup(&g_app.trace);
+	event_history_cleanup(&g_app.history);
 
 	if (g_app.debounce_ready)
 	{
@@ -1349,6 +1507,13 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 			OpenLogFolder();
 			return 0;
 		}
+		if (menu_id == IDM_EXPORT_SUPPORT)
+		{
+			// No dump: this path exists to be usable *before* anything goes wrong,
+			// and a minidump of a healthy process would only add noise.
+			ExportSupportBundle();
+			return 0;
+		}
 		if (menu_id == IDM_OPEN_SETTINGS)
 		{
 			OpenCheckupWindow();
@@ -1577,6 +1742,9 @@ int CALLBACK wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 
 	// A dump is the only way to turn a user's "it closed itself" into a stack.
 	// Installed before anything can fail, and it changes nothing the user sees.
+	// The collector is registered first, so even a crash during start-up produces
+	// a report that names the version and the settings.
+	crash_dump_set_report_collector(CollectSupportReport);
 	crash_dump_install();
 
 	// The check-up window uses a tooltip, which comes from the version 6 common

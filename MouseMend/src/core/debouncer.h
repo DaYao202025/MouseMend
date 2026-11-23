@@ -114,6 +114,11 @@ typedef struct
 // window could report one blocked click while the evidence block stays empty.
 bool debounce_decision_is_false_click(const DebounceDecision *decision);
 
+// Stable, language independent name of a verdict, used by the support report
+// The check-up window shows localized text; a report that lands in a bug tracker
+// has to stay greppable, so the two never share a string.
+const char *debounce_reason_slug(DebounceReason reason);
+
 // Process a mouse event and determine if it should be blocked
 bool debounce_process_event(DebounceManager *manager, const MouseEvent *event);
 

@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-2.1.2-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-informational.svg)
 ![Toolset](https://img.shields.io/badge/toolset-MSVC%20v145-purple.svg)
@@ -74,8 +74,14 @@ presses match the *intended* presses.
 * **Hook watchdog** — a low-level mouse hook can be removed by the system
   without any notice. The watchdog notices the silence, reinstalls the hook and
   re-samples its baseline, once per 30 seconds at most.
-* **Crash dumps** — if the process ever dies, a minidump is written next to the
-  log directory so the crash can be diagnosed instead of guessed at.
+* **One-file crash report** — if the process ever dies, a single zip appears next
+  to the executable: a minidump, a text report of the last 96 decisions, the
+  settings in force and the exception itself. Attaching that one file is the
+  whole bug report, and no Event Viewer, folder hunt or debugger is involved.
+  Older bundles are pruned, so a crash loop leaves three files, not thirty.
+* **Export diagnostics on demand** — the same bundle from the tray menu while the
+  program is still healthy. Asking a user for evidence should never require
+  reproducing the fault first.
 
 ### How the decision is made
 
@@ -182,8 +188,14 @@ Windows drop the hook.
 ### Privacy
 
 No network access, no telemetry, no analytics, no update check. The only files it
-ever writes are its own settings in the registry, an optional blocked-click log
-and an optional crash dump. Nothing leaves the machine.
+ever writes are its own settings in the registry, an optional blocked-click log,
+and the support bundle: on a crash, or when you ask for one from the menu. A
+bundle is never uploaded anywhere by the program - it appears on disk and stays
+there until you decide what to do with it. Nothing leaves the machine.
+
+A bundle contains the mouse coordinates of recent clicks and a minidump whose
+stack memory can carry file paths and window titles. `README.txt` inside the zip
+says so as well, so nobody attaches one without knowing.
 
 ---
 
@@ -228,8 +240,12 @@ MouseMend 常驻托盘，在软件层过滤鼠标事件流 —— 让磨损的�
 * **拦截历史（默认关）** —— 一天一个文件，只有真的拦到东西才写盘。
 * **看门狗** —— 低级鼠标钩子可能被系统静默摘掉。看门狗会发现"没有输入"这件事，
   重装钩子并重采样基线，最快 30 秒一次。
-* **崩溃转储** —— 万一进程真的挂了，会在日志目录旁写一个 minidump，让崩溃可以
-  被查清，而不是靠猜。
+* **一个文件搞定崩溃报告** —— 万一进程真的挂了，会在程序旁边生成**一个 zip**：
+  minidump、最近 96 条判定的文字时间线、当时的全部设置和异常信息。让用户发这一个
+  文件就够，不用找事件查看器、不用翻用户目录、不用调试器。旧文件自动清理，
+  反复崩溃最多留 3 个。
+* **随时手动导出诊断包** —— 程序还正常的时候也能从托盘菜单导出同一份报告。
+  找用户要证据，不该以"先复现一次"为前提。
 
 ### 判定是怎么做的
 
@@ -283,6 +299,30 @@ MouseMend-x64.exe --diagnose    打印只读自检报告后退出
 开机自启状态，以及一个总体结论。它不修改任何东西。报告刻意保持纯 ASCII，
 这样即使被管道传给代码页不同的控制台也不会变成乱码。
 
+### 出问题时的诊断包
+
+托盘菜单 → 高级 → 导出诊断报告…，会在**程序所在目录**生成
+`MouseMend-support-<时间>.zip`。如果那个目录不可写（放在 `Program Files` 里、
+或者只读 U 盘上），会依次退到桌面、`%LOCALAPPDATA%\MouseMend`、`%TEMP%` ——
+宁可换个地方，也不能一条证据都没有。
+
+程序崩溃时生成的是 `MouseMend-crash-<时间>.zip`，并且**下次启动时用托盘气泡
+告诉你它在哪**，只提示一次，不会反复打扰。
+
+| 包里有什么 | 说明 |
+| :--- | :--- |
+| `report.txt` | 版本、系统、异常代码与地址（含所属模块和偏移）、当时的全部设置、钩子健康度、句柄 / GDI / USER 对象数、最近 96 条鼠标判定（按键、方向、坐标、间隔、阈值、判决） |
+| `crash.dmp` | 崩溃时的最小转储，只有崩溃才有。它保存了各线程的栈和模块表，足以定位到出错的函数 |
+| `README.txt` | 中文说明，含隐私提醒 |
+
+手动导出时没有 `crash.dmp` —— 健康进程的转储除了让文件变大没有别的用处。
+
+同一目录下每种前缀最多保留 3 个，更早的自动删除；只删自己生成的文件，
+`MouseMend-*.zip` 之外的东西一律不碰。
+
+**已知盲区**：如果崩溃是栈溢出，这套机制可能什么也拿不到 —— 写报告本身也需要
+栈。那种情况只能靠系统事件日志。
+
 ### 设置存在哪
 
 全部按用户存于 `HKCU\Software\MouseMend`。不写系统级位置，不需要管理员权限 ——
@@ -310,7 +350,11 @@ MouseMend-x64.exe --diagnose    打印只读自检报告后退出
 ### 隐私
 
 不联网、不上报、不统计、不检查更新。它只会写三类东西：注册表里的自身设置、
-可选的拦截日志、可选的崩溃转储。任何数据都不会离开本机。
+可选的拦截日志，以及诊断包（崩溃时自动、或你手动导出）。诊断包不会被程序上传到
+任何地方 —— 它生成后就留在磁盘上，怎么处理由你决定。任何数据都不会离开本机。
+
+诊断包里含有鼠标点击的屏幕坐标，`crash.dmp` 的栈内存里还可能夹带文件路径和窗口
+标题。zip 内的 `README.txt` 也写了这一点，避免有人在不知情的情况下把它传出去。
 
 ---
 
@@ -383,6 +427,7 @@ src/utils/
   logger.c                  debug-only file log
 
 tests/                      console test suite, no window required
+  tools/audit_printf.py     static check: every format string versus its call site
 ```
 
 ### Design rules that matter / 关键设计约束
@@ -433,6 +478,29 @@ almost always uninitialised memory, not an architecture-specific difference.
 
 两个架构都必须跑。只在某一个上失败，几乎总是未初始化内存，而不是架构差异。
 
+### Static check: format strings / 静态检查：格式串
+
+```bat
+python tests\tools\audit_printf.py
+```
+
+Every printf-family call is compared against the arguments it actually receives:
+the format is resolved through both translation tables, and each argument's type
+comes from its declaration rather than its name. A mismatch exits non-zero.
+
+This is not busywork. 2.0.0 shipped a crash where the evidence line was
+`" (engine judged by %s)"` while the call site passed a millisecond count: printf
+read the number as a string pointer and walked into it. The compiler accepts it,
+`/analyze` accepts it, and the placeholder test only compares English with
+Chinese — two identically wrong strings pass. Only a call-site check catches it.
+
+每次 printf 调用都会拿**实参**去核对格式串：格式串会通过两张语言表解析成真实字符串，
+实参类型取自变量声明而不是变量名。不一致就返回非零。
+
+这不是走形式。2.0.0 崩过一次：证据行写成 `%s`，调用处传的却是毫秒数，printf 把数字
+当指针去读。编译器不管，`/analyze` 不管，占位符测试只比对中英文 —— 两边错得一样就
+都通过。只有对着调用点查才抓得住。
+
 ### Smoke tests / 冒烟测试
 
 ```powershell
@@ -474,7 +542,7 @@ Released under the MIT licence — see [LICENSE](LICENSE).<br>
 
 <div align="center">
 
-**MouseMend 2.0.0** — MIT licensed, built with plain C and the Win32 API.<br>
-**MouseMend 2.0.0** —— MIT 许可证，纯 C 与 Win32 API 实现。
+**MouseMend 2.1.2** — MIT licensed, built with plain C and the Win32 API.<br>
+**MouseMend 2.1.2** —— MIT 许可证，纯 C 与 Win32 API 实现。
 
 </div>

@@ -308,6 +308,10 @@ bool context_menu_create(ContextMenuManager *manager, DebounceManager *debounce,
 		open_log_flags |= MF_GRAYED;
 	InsertMenuW(hAdvanced, -1, open_log_flags, IDM_OPEN_LOG_FOLDER, lang_str(STR_OPEN_LOG_FOLDER));
 
+	// Always enabled, even when the history is off: this is how a user asks for
+	// help, and it must not depend on an unrelated setting.
+	InsertMenuW(hAdvanced, -1, MF_BYPOSITION | MF_STRING, IDM_EXPORT_SUPPORT, lang_str(STR_EXPORT_SUPPORT));
+
 	InsertMenuW(hAdvanced, -1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
 
 	InsertMenuW(hAdvanced, -1, MF_BYPOSITION | MF_STRING, IDM_RESTORE_DEFAULTS, lang_str(STR_RESTORE_DEFAULTS));

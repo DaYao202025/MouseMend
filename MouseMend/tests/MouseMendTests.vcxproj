@@ -73,6 +73,9 @@
     <ClCompile Include="..\src\core\mouse_hook.c" />
     <ClCompile Include="..\src\core\app_controller.c" />
     <ClCompile Include="..\src\core\app_snapshot.c" />
+    <ClCompile Include="..\src\core\event_history.c" />
+    <ClCompile Include="..\src\utils\support_bundle.c" />
+    <ClCompile Include="..\src\utils\zip_writer.c" />
     <ClCompile Include="..\src\core\block_log.c" />
     <ClCompile Include="..\src\core\event_trace.c" />
     <ClCompile Include="..\src\core\hook_watchdog.c" />
@@ -80,6 +83,7 @@
     <ClCompile Include="..\src\ui\language.c" />
     <ClCompile Include="..\src\ui\log_format.c" />
     <ClCompile Include="..\src\ui\ripple_view.c" />
+    <ClCompile Include="..\src\ui\window_layout.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="test_common.h" />

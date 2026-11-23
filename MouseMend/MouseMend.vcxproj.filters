@@ -36,6 +36,15 @@
     <ClCompile Include="src\core\app_snapshot.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\core\event_history.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\utils\support_bundle.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\utils\zip_writer.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\ui\ripple_view.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -113,7 +122,16 @@
     <ClInclude Include="src\core\block_log.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\core\event_history.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\core\event_trace.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\utils\support_bundle.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\utils\zip_writer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\ripple_view.h">

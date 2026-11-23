@@ -1,22 +1,27 @@
 #pragma once
 
 #include <stdbool.h>
+#include <windows.h>
+#include "support_bundle.h"
 
-// Minidump capture for the crash Windows would otherwise swallow.
+// Crash capture for the faults Windows would otherwise swallow.
 //
-// A bug report that only says "fault offset 0x17975" cannot be turned into a
-// fix without a stack, and the offset changes with every build. One dump per
-// crash is enough to name the function that violated the access.
+// A report that only says "it closed itself" cannot be turned into a fix, and a
+// folder next to the executable is not somewhere a non-technical user looks. So
+// one crash produces one zip in a place he can find: the executable's folder
+// first, then the desktop, then %LOCALAPPDATA%, then %TEMP%.
 //
 // The filter deliberately avoids the CRT: a corrupted heap is exactly the
-// situation it has to survive, so it only calls Win32.
+// situation it has to survive, so it only calls Win32 and keeps large buffers
+// static.
+
+// Supplies the application specific half of the report. Called from inside the
+// exception filter, so it must not allocate, wait on a lock, or call anything
+// that can block. May be NULL, in which case only the dump is written.
+typedef void (*CrashReportCollectFn)(SupportReport *report);
 
 // Install the filter. Call once, early in WinMain.
-// The directory is resolved lazily, on the crash itself: a user who never
-// crashes does not get an empty Log folder next to the executable.
-//
-// The dump is written next to the executable's Log folder, or under
-// %LOCALAPPDATA%\MouseMend\Log when that folder is read-only. Its name carries
-// the local time of the crash, so a support case only has to say "it happened
-// at 23:18" to identify the file.
 void crash_dump_install(void);
+
+// Register the collector above. Call before crash_dump_install.
+void crash_dump_set_report_collector(CrashReportCollectFn collector);
