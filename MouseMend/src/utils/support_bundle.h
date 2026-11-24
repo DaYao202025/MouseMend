@@ -25,7 +25,13 @@
 // File name prefixes. They are also the retention groups: pruning never deletes
 // a file it did not create.
 #define SUPPORT_PREFIX_CRASH L"MouseMend-crash"
-#define SUPPORT_PREFIX_MANUAL L"MouseMend-support"
+
+// Used to be "MouseMend-support". Renamed because there is no support desk to
+// speak of: one person writes this, and a file called "support" reads like a
+// ticket number. Bundles written by older versions keep the old name - pruning
+// only ever touches the current prefix, so they are left where they are instead
+// of being matched and deleted by a name the user never saw us use.
+#define SUPPORT_PREFIX_MANUAL L"MouseMend-diagnostics"
 
 // Everything the report is made of. Filled by the application (which is the only
 // place that knows g_app) and by support_bundle_prepare, then rendered once.

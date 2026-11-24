@@ -194,7 +194,7 @@ Windows drop the hook.
 
 No network access, no telemetry, no analytics, no update check. The only files it
 ever writes are its own settings in the registry, an optional blocked-click log,
-and the support bundle: on a crash, or when you ask for one from the menu. A
+and the diagnostics bundle: on a crash, or when you ask for one from the menu. A
 bundle is never uploaded anywhere by the program - it appears on disk and stays
 there until you decide what to do with it. Nothing leaves the machine.
 
@@ -307,7 +307,7 @@ MouseMend-x64.exe --diagnose    打印只读自检报告后退出
 ### 出问题时的诊断包
 
 托盘菜单 → 高级 → 导出诊断报告…，会在**程序所在目录**生成
-`MouseMend-support-<时间>.zip`。如果那个目录不可写（放在 `Program Files` 里、
+`MouseMend-diagnostics-<时间>.zip`。如果那个目录不可写（放在 `Program Files` 里、
 或者只读 U 盘上），会依次退到桌面、`%LOCALAPPDATA%\MouseMend`、`%TEMP%` ——
 宁可换个地方，也不能一条证据都没有。
 
