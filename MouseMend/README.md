@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.1.3-blue.svg)
+![Version](https://img.shields.io/badge/version-2.1.4-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-informational.svg)
 ![Toolset](https://img.shields.io/badge/toolset-MSVC%20v145-purple.svg)
@@ -84,6 +84,10 @@ presses match the *intended* presses.
   notices ten seconds of silence from the window and writes the same kind of
   zip, named `MouseMend-hang-<time>.zip`, before the user gives up and signs
   out. The next start says where it went.
+* **It says when it could not deliver** — Windows refuses input from a
+  lower-privilege program to an elevated window, so a release aimed at one is
+  lost. That used to be invisible; it is now counted, written into the report
+  and mentioned once per run.
 * **Export diagnostics on demand** — the same bundle from the tray menu while the
   program is still healthy. Asking a user for evidence should never require
   reproducing the fault first.
@@ -259,6 +263,9 @@ MouseMend 常驻托盘，在软件层过滤鼠标事件流 —— 让磨损的�
   以前是什么证据都不留。现在有个看门狗线程盯着窗口的心跳，**安静超过 10 秒**就
   自动生成同样的一份 zip，文件名 `MouseMend-hang-<时间>.zip`，用户不必等到注销
   才发现东西没了。下次启动会告诉他文件在哪。
+* **送不出去的时候会说** —— 当前窗口以管理员身份运行时，Windows 不允许普通权限的
+  程序向它发输入，那一次松手就丢了。以前这是**完全静默**的：用户只觉得拖拽结束得
+  有点晚，报告里也看不出任何问题。现在会计数、写进诊断报告，并每次运行提示一次。
 * **随时手动导出诊断包** —— 程序还正常的时候也能从托盘菜单导出同一份报告。
   找用户要证据，不该以"先复现一次"为前提。
 
@@ -533,13 +540,20 @@ pwsh -File tests\smoke\diagnose.ps1     # --version and --diagnose
 pwsh -File tests\smoke\stuck_key.ps1 -Force   # needs an interactive desktop
 ```
 
-The first two export `HKCU\Software\MouseMend` before they start and restore it
-afterwards, so running them does not change your settings. `stuck_key.ps1` drives
-a real deferred release and checks that no button is left pressed; it is skipped
-when the session is locked.
+All three export `HKCU\Software\MouseMend` before they start and restore it
+afterwards, so running them does not change your settings.
 
-前两个脚本会先导出、结束时还原 `HKCU\Software\MouseMend`，不会动你的实际设置。
-`stuck_key.ps1` 会真实触发一次延迟松手并确认没有按键卡住；锁屏时会自动跳过。
+`stuck_key.ps1` checks that **injected input passes through untouched** — a
+release sent by another program must arrive immediately, not be held back like a
+real one would be. It cannot test the deferral itself: the program ignores
+injected events by design, because remote desktop and macro tools deliver every
+click that way. That mechanism is covered by the unit tests instead.
+
+The first two export、结束时还原 `HKCU\Software\MouseMend`，不会动你的实际设置。
+
+`stuck_key.ps1` 验证的是**注入的输入必须原样通过**：别的软件发出的松手要立刻到达，
+不能被当成真实输入推迟。它测不了延迟松手本身 —— 产品刻意忽略注入事件（远程桌面、
+按键精灵这类工具发的每一个点击都是注入的），那条路径由单元测试覆盖。
 
 ---
 
@@ -566,7 +580,7 @@ Released under the MIT licence — see [LICENSE](LICENSE).<br>
 
 <div align="center">
 
-**MouseMend 2.1.3** — MIT licensed, built with plain C and the Win32 API.<br>
-**MouseMend 2.1.3** —— MIT 许可证，纯 C 与 Win32 API 实现。
+**MouseMend 2.1.4** — MIT licensed, built with plain C and the Win32 API.<br>
+**MouseMend 2.1.4** —— MIT 许可证，纯 C 与 Win32 API 实现。
 
 </div>

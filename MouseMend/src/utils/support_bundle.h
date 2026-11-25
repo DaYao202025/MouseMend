@@ -80,6 +80,13 @@ typedef struct
 	uint32_t hook_events;
 	uint32_t hook_recoveries;
 
+	// Injections that were attempted and never arrived, and ones the structural
+	// guard refused. The first is usually UIPI - the focused window runs as
+	// administrator - and reaches the user as a drag that ended late, never as
+	// an error message. The second must stay at zero.
+	uint32_t injection_failures;
+	uint32_t injection_refused;
+
 	// Process resources: a leak shows up here long before it kills the process
 	uint32_t handle_count;
 	uint32_t gdi_objects;

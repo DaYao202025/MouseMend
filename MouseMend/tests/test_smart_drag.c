@@ -18,6 +18,20 @@
 // Time base for all synthetic events
 static uint64_t g_base = 0;
 
+// Recorded injections, so the replay can be asserted without clicking anything
+static INPUT g_injected[4];
+static int g_injected_count = 0;
+
+static bool record_injection(const INPUT *inputs, UINT count)
+{
+	g_injected_count = (int)count;
+
+	for (UINT i = 0; i < count && i < ARRAYSIZE(g_injected); i++)
+		g_injected[i] = inputs[i];
+
+	return true;
+}
+
 // Build a synthetic event, offset in milliseconds from the time base
 static MouseEvent make_event(MouseButton button, uint64_t offset, bool is_down, long x, long y, int32_t data)
 {
@@ -52,6 +66,10 @@ void test_smart_drag_run(void)
 	printf("debounce state machine\n");
 
 	g_base = GetTickCount64();
+
+	// Nothing in this file needs the real input queue, and a test that clicks the
+	// desktop it happens to run on is a test nobody dares to run.
+	debounce_set_injection_sink(record_injection);
 
 	DebounceManager manager;
 
@@ -327,7 +345,49 @@ void test_smart_drag_run(void)
 
 	debounce_set_defer_available(&manager, true);
 
+	// ------------------------------------------------------------------
+	// The replay itself: what actually reaches the system, and in what order
+	// ------------------------------------------------------------------
+	reset_state(&manager);
+	g_injected_count = 0;
+
+	MouseEvent replay2_down = make_event(MOUSE_BUTTON_LEFT, 22000, true, 300, 200, 0);
+	MouseEvent replay2_up = make_event(MOUSE_BUTTON_LEFT, 22300, false, 300, 200, 0);
+	MouseEvent replay2_press = make_event(MOUSE_BUTTON_LEFT, 22340, true, 305, 205, 0);
+
+	CHECK(!debounce_process_event(&manager, &replay2_down));
+	CHECK(debounce_process_event(&manager, &replay2_up));
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+
+	// The press is swallowed here and stays swallowed: nothing may be injected
+	// from this stack, it is the one the hook callback runs on.
+	CHECK(debounce_process_event(&manager, &replay2_press));
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
+	CHECK(g_injected_count == 0);
+
+	debounce_service_replay(&manager);
+
+	// One call carrying two events: the held release first, the press second
+	CHECK(g_injected_count == 2);
+	CHECK(g_injected[0].mi.dwFlags == MOUSEEVENTF_LEFTUP);
+	CHECK(g_injected[1].mi.dwFlags == (MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE));
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
+	CHECK(!debounce_has_pending_work(&manager));
+	CHECK(debounce_injection_failures() == 0);
+	CHECK(debounce_injection_refusals() == 0);
+
+	// The press has to land where it happened. Somewhere else would make the
+	// next release look like a drag and defer a plain click.
+	int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+	int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+	int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+	int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+	CHECK(g_injected[1].mi.dx == MulDiv(305 - vx, 65535, vw - 1));
+	CHECK(g_injected[1].mi.dy == MulDiv(205 - vy, 65535, vh - 1));
+
 	debounce_flush_deferred_releases(&manager);
 
 	debounce_cleanup(&manager);
+	debounce_set_injection_sink(NULL);
 }

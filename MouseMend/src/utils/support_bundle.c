@@ -299,6 +299,8 @@ bool support_bundle_build_text(const SupportReport *report, char *buffer, size_t
 	append(buffer, buffer_count, "\nhealth\n-----\n");
 	append(buffer, buffer_count, "hook_active : %s\n", report->hook_active ? "yes" : "NO");
 	append(buffer, buffer_count, "hook_events : %u\n", (unsigned)report->hook_events);
+	append(buffer, buffer_count, "inject_fail : %u\n", (unsigned)report->injection_failures);
+	append(buffer, buffer_count, "inject_ref  : %u\n", (unsigned)report->injection_refused);
 	append(buffer, buffer_count, "recoveries  : %u\n", (unsigned)report->hook_recoveries);
 
 	append(buffer, buffer_count, "\nresources\n-----\n");

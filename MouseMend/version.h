@@ -4,13 +4,13 @@
 
 #define APP_VERSION_MAJOR 2
 #define APP_VERSION_MINOR 1
-#define APP_VERSION_PATCH 3
+#define APP_VERSION_PATCH 4
 
-#define APP_VERSION_STRING "2.1.3"
+#define APP_VERSION_STRING "2.1.4"
 
 // Wide variant, kept in sync by hand because C cannot widen a string literal.
 // tests/test_core.c asserts that both spell the same version.
-#define APP_VERSION_STRING_W L"2.1.3"
+#define APP_VERSION_STRING_W L"2.1.4"
 
 #define APP_NAME "MouseMend"
 #define APP_NAME_W L"MouseMend"

@@ -204,6 +204,32 @@ void debounce_check_deferred_releases(DebounceManager *manager);
 // Release every deferred button immediately (safety net when the timer is unavailable)
 void debounce_flush_deferred_releases(DebounceManager *manager);
 
+// How many injections never reached the system
+//
+// SendInput returns zero when the focused window belongs to a higher integrity
+// process (UIPI), and also when the session has no input desktop - a locked
+// workstation, for instance. Either way the release is gone and, until this
+// counter existed, nothing anywhere said so: the user saw a drag that ended
+// late and the report looked perfectly healthy.
+uint32_t debounce_injection_failures(void);
+
+// Injections the structural guard refused because they came from inside the
+// hook callback. Must stay at zero: a non-zero value means a new call site was
+// added on the wrong stack, and every one of those is a lost release.
+uint32_t debounce_injection_refusals(void);
+
+// Same counter, but reported once: true on the first call after a failure, so
+// the application can tell the user one time instead of on every tick.
+bool debounce_take_injection_failure(void);
+
+// Replace the injection sink. NULL restores the real SendInput.
+//
+// Exists so the replay sequence can be asserted - order, flags and coordinates -
+// without clicking the desktop the tests happen to run on. The structural guard
+// (never inject from inside the hook) still applies to whatever sink is set.
+typedef bool (*DebounceInjectionFn)(const INPUT *inputs, UINT count);
+void debounce_set_injection_sink(DebounceInjectionFn sink);
+
 // Tell the engine whether a held release could be given back at all
 // Call with false when the deferred-release timer cannot be armed: holding a
 // release without a way to deliver it is how a button ends up pressed forever.

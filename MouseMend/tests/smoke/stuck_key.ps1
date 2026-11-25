@@ -1,11 +1,25 @@
-# Regression test for the deferred-release timer.
+# What this test can and cannot prove.
 #
-# It performs a synthetic long press (down -> 300 ms -> up). Because the press
-# lasts longer than the "drag" threshold, the application swallows the release
-# and re-injects it ~50 ms later. If the deferred-release timer were never armed,
-# the button would stay logically pressed forever.
+# It CANNOT test the deferred release, and it used to pretend it did. That
+# mechanism needs input the product treats as real, and the product ignores
+# injected events on purpose. SendInput is exactly what it ignores, so the
+# release this script sent was never swallowed - it reached the system on its
+# own, and the old assertion ("the button is released") passed no matter what
+# the program did. The rule is not going to be relaxed either: remote desktop,
+# macro tools and some touchpad drivers deliver every click as injected input,
+# and debouncing those would break the mouse for those users.
 #
-# WARNING: this really clicks the desktop, so it only runs with -Force.
+# The deferral, the replay and their ordering are covered by
+# tests/test_smart_drag.c, which feeds synthetic events straight into the engine
+# and records the injection sink.
+#
+# What is left here is the property that rule exists for, which is worth a real
+# test: injected input must pass through untouched. If the filter ever starts
+# holding back other tools' input, every remote desktop user gets a mouse that
+# drags slowly, and this is the check that notices.
+#
+# WARNING: this really presses and releases a button on the desktop, so it only
+# runs with -Force.
 #
 # Usage:
 #   pwsh -NoProfile -File tests\smoke\stuck_key.ps1 -Force [-Configuration Release]
@@ -31,7 +45,8 @@ public static class Input {
     [StructLayout(LayoutKind.Sequential)]
     public struct INPUT { public uint type; public MOUSEINPUT mi; }
     [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int cbSize);
-    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int x; public int y; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int x; public int y; }
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
@@ -43,6 +58,7 @@ public static class Input {
         a[0].mi.dwFlags = flags;
         SendInput(1, a, Marshal.SizeOf(typeof(INPUT)));
     }
+    public static bool Down() { return (GetAsyncKeyState(0x01) & 0x8000) != 0; }
 }
 "@
 
@@ -88,7 +104,7 @@ Start-Sleep -Milliseconds 150
 # ignored, which would turn this test into a false failure. Detect that first.
 [Input]::Left([Input]::LEFTDOWN)
 Start-Sleep -Milliseconds 120
-$calibration = [Input]::GetAsyncKeyState(0x01) -band 0x8000
+$calibration = [Input]::Down()
 [Input]::Left([Input]::LEFTUP)
 Start-Sleep -Milliseconds 200
 
@@ -104,17 +120,28 @@ if (-not $calibration) {
     exit 2
 }
 
-# Long press: the release is swallowed and re-injected by the timer
+# A hold long enough that the program would hold a REAL release back on purpose
+# (200 ms drag threshold, 50 ms release delay). Injected input must not be
+# touched: the release has to arrive immediately, not 50 ms later.
 [Input]::Left([Input]::LEFTDOWN)
 Start-Sleep -Milliseconds 320
-$downState = [Input]::GetAsyncKeyState(0x01) -band 0x8000
-Check 'button is down before release' ([bool]$downState) $true
+Check 'injected press reaches the system' ([Input]::Down()) $true
 
+$sw = [Diagnostics.Stopwatch]::StartNew()
 [Input]::Left([Input]::LEFTUP)
-Start-Sleep -Milliseconds 400
+while ([Input]::Down() -and $sw.ElapsedMilliseconds -lt 500) { }
 
-$upState = [Input]::GetAsyncKeyState(0x01) -band 0x8000
-Check 'button is released by the deferred-release timer' ([bool]$upState) $false
+$latency = $sw.ElapsedMilliseconds
+$sw.Stop()
+
+Check 'injected release reaches the system' ([Input]::Down()) $false
+Check 'injected release is not held back (under 20 ms)' ($latency -lt 20) $true
+Write-Host ("      measured latency: {0} ms  (a deferred release would be about 50 ms)" -f $latency) -ForegroundColor DarkGray
+
+# The button must not be left pressed no matter what happened above
+[Input]::Left([Input]::LEFTUP)
+Start-Sleep -Milliseconds 120
+Check 'button is not stuck after the sequence' ([Input]::Down()) $false
 
 [void][Input]::SetCursorPos($origin.X, $origin.Y)
 
@@ -125,7 +152,7 @@ Remove-Item -Path $regPath -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($settings_existed -and (Test-Path $backup_file)) {
     & reg.exe import $backup_file | Out-Null
-    Remove-Item -Path $backup_file -Force
+    Remove-Item $backup_file -Force
 }
 
 Write-Host ""

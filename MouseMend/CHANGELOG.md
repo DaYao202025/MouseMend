@@ -1,5 +1,33 @@
 # Changelog / 更新记录
 
+## 2.1.4 — 2026-11-25
+
+### 修复 / Fixed
+
+- **松手送不出去时不再静默** —— 当前窗口以管理员身份运行时，Windows 不允许普通权限的
+  程序向它发送输入，`SendInput` 返回 0，那一次松手就丢了。以前没有任何地方记录，
+  用户只觉得"这次拖拽结束得有点晚"，报告里也一切正常。现在会计数、写进诊断报告
+  （`inject_fail`），并在**每次运行只提示一次**。
+  A release that never reaches the system is now counted, reported and mentioned
+  once. Until now it was indistinguishable from the program doing nothing wrong.
+
+- **测试里的一条假通过** —— `stuck_key.ps1` 用 `SendInput` 造输入，而产品刻意忽略注入
+  事件，所以它测的那条路径**根本没有产品参与**，断言永远成立。改为验证一条真实且
+  重要的性质：**注入的输入必须原样通过**（否则远程桌面用户的所有点击都会被当成本地
+  点击去抖，鼠标会变粘）。延迟松手本身改由单元测试覆盖 —— 注入出口可替换，测试直接
+  断言 `UP → DOWN(原坐标)` 的顺序与坐标，**不再真的点桌面**。
+
+### 变更 / Changed
+
+- 单元测试现在完全不产生真实输入（以前会真的发几个松手事件）。
+
+### 验证 / Verified
+
+Debug 与 Release × x64 / x86 全量构建零告警（含 `/analyze`）；2621 条断言通过；
+`e2e` 与 `diagnose` 冒烟各 0 failure。
+
+---
+
 ## 2.1.3 — 2026-11-25
 
 ### 修复 / Fixed

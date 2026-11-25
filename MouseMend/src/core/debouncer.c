@@ -12,39 +12,54 @@ static bool deferred_release_take(DebounceManager *manager, int button);
 // something started injecting from the wrong stack again.
 static volatile LONG g_injection_refused = 0;
 
-// Every injection in this module goes through these two.
+// Injections that were attempted and did not arrive. UIPI is the usual reason:
+// a medium integrity process cannot send input to an elevated window. The user
+// experiences a drag that ends late; nothing used to record it.
+static volatile LONG g_injection_failures = 0;
+static volatile LONG g_injection_failure_unread = 0;
+
+// Test seam. NULL means the real SendInput; see debounce_set_injection_sink.
+static DebounceInjectionFn g_injection_sink = NULL;
+
+// Every injection in this module goes through here.
 //
 // The callback runs on the thread that owns the hook. SendInput made from that
 // stack has to travel the hook chain again and finds its head busy waiting for
 // itself, so the thread never returns and the process can only be removed by
 // signing out. Refusing costs one lost release; that is the cheaper failure by
 // a wide margin.
-static bool inject_mouse(DWORD flags, DWORD data)
+static bool inject_inputs(const INPUT *inputs, UINT count)
 {
+	if (!inputs || count == 0)
+		return false;
+
 	if (mouse_hook_in_callback())
 	{
 		InterlockedIncrement(&g_injection_refused);
 		return false;
 	}
 
+	bool ok = g_injection_sink ? g_injection_sink(inputs, count)
+							   : (SendInput(count, (LPINPUT)inputs, sizeof(INPUT)) == count);
+
+	if (!ok)
+	{
+		InterlockedIncrement(&g_injection_failures);
+		InterlockedExchange(&g_injection_failure_unread, 1);
+	}
+
+	return ok;
+}
+
+static bool inject_mouse(DWORD flags, DWORD data)
+{
 	INPUT input;
 	memset(&input, 0, sizeof(input));
 	input.type = INPUT_MOUSE;
 	input.mi.dwFlags = flags;
 	input.mi.mouseData = data;
 
-	return SendInput(1, &input, sizeof(input)) == 1;
-}
-
-static bool inject_mouse_pair(const INPUT *inputs, UINT count)
-{
-	if (mouse_hook_in_callback())
-	{
-		InterlockedIncrement(&g_injection_refused);
-		return false;
-	}
-
-	return SendInput(count, (LPINPUT)inputs, sizeof(INPUT)) == count;
+	return inject_inputs(&input, 1);
 }
 
 // MOUSEEVENTF flags for one button, or false when that button has none
@@ -1019,7 +1034,7 @@ void debounce_service_replay(DebounceManager *manager)
 		inputs[1].mi.dx = (vw > 1) ? MulDiv((int)point.x - vx, 65535, vw - 1) : 0;
 		inputs[1].mi.dy = (vh > 1) ? MulDiv((int)point.y - vy, 65535, vh - 1) : 0;
 
-		bool delivered = inject_mouse_pair(inputs, 2);
+		bool delivered = inject_inputs(inputs, 2);
 
 		EnterCriticalSection(&manager->cs);
 
@@ -1073,4 +1088,26 @@ void debounce_drop_replays(DebounceManager *manager)
 		if (give_back)
 			inject_mouse(flags, data);
 	}
+}
+
+uint32_t debounce_injection_failures(void)
+{
+	return (uint32_t)InterlockedCompareExchange(&g_injection_failures, 0, 0);
+}
+
+uint32_t debounce_injection_refusals(void)
+{
+	return (uint32_t)InterlockedCompareExchange(&g_injection_refused, 0, 0);
+}
+
+bool debounce_take_injection_failure(void)
+{
+	return InterlockedExchange(&g_injection_failure_unread, 0) != 0;
+}
+
+void debounce_set_injection_sink(DebounceInjectionFn sink)
+{
+	// Tests only, and single threaded: the pointer is never swapped while an
+	// injection is in flight, so no interlocking is needed here.
+	g_injection_sink = sink;
 }

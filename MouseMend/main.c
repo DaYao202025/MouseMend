@@ -79,6 +79,7 @@ typedef struct
 	bool log_queue_ready;
 	bool log_flush_requested;
 	bool log_warning_shown;
+	bool injection_notice_shown; // One balloon per run for lost injections
 	uint32_t log_written;
 
 	// Decisions the engine made, shown by the check-up window
@@ -527,6 +528,9 @@ static void CollectSupportReport(SupportReport *report)
 	report->hook_active = IsHookActive();
 	report->hook_events = g_app.hook_events;
 	report->hook_recoveries = g_app.hook_recoveries;
+
+	report->injection_failures = debounce_injection_failures();
+	report->injection_refused = debounce_injection_refusals();
 
 	report->event_count = event_history_copy(&g_app.history, report->events, SUPPORT_EVENT_MAX);
 }
@@ -1438,6 +1442,17 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 			// the message loop does, which is exactly the thing that stops when
 			// the program hangs.
 			hang_watchdog_beat();
+
+			// A release that never reached the system is invisible otherwise: the
+			// user sees a drag that ended late, and the report used to look
+			// perfectly healthy. Say it once, and only once, per run.
+			if (!g_app.injection_notice_shown && g_app.tray_ready &&
+				debounce_take_injection_failure())
+			{
+				g_app.injection_notice_shown = true;
+				tray_icon_show_balloon(&g_app.tray_icon, APP_NAME_W,
+									   lang_str(STR_INJECTION_FAILED), NIIF_WARNING);
+			}
 
 			// Write the settings 400 ms after the last change, so dragging a
 			// slider does not turn into hundreds of registry writes
