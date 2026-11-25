@@ -523,6 +523,19 @@ bool debounce_process_event_ex(DebounceManager *manager, const MouseEvent *event
 
 		// Hybrid Heuristic: hold the release back briefly so that a bouncing
 		// switch cannot interrupt an ongoing drag, then re-inject it.
+		//
+		// Both tests have to pass, not either one.
+		//
+		// Holding the release means the system still believes the button is down,
+		// so anything the pointer does in the meantime is a drag: a window follows
+		// the mouse, a text selection grows, a scrollbar keeps moving. That is a
+		// fair price to keep a drag alive on a switch that is chattering, but it is
+		// not a fair price for an ordinary click - and with "either one" it was
+		// charged for every click that drifted more than a few pixels while the
+		// pointer was down, which is most of them. Users described it as the button
+		// sticking and a click turning into a selection.
+		//
+		// A real drag is long AND has moved. Anything else releases immediately.
 		if (!should_block && manager->use_hybrid_heuristic && manager->defer_available)
 		{
 			uint64_t hold_time = elapsed_since(event->timestamp, data->downTime);
@@ -531,7 +544,7 @@ bool debounce_process_event_ex(DebounceManager *manager, const MouseEvent *event
 			long dist_sq = dx * dx + dy * dy;
 			long drag_distance = (long)manager->dragDistancePx;
 
-			if (hold_time > (uint64_t)manager->dragHoldTimeMs || dist_sq > drag_distance * drag_distance)
+			if (hold_time > (uint64_t)manager->dragHoldTimeMs && dist_sq > drag_distance * drag_distance)
 			{
 				data->isDeferringRelease = true;
 				data->deferStartTime = event->timestamp;

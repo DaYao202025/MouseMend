@@ -118,12 +118,29 @@ void test_smart_drag_run(void)
 	CHECK(!debounce_process_event(&manager, &down3));
 
 	// ------------------------------------------------------------------
-	// Holding the button longer than the drag threshold defers the release
+	// A long press that never moved is a long click, not a drag: the release
+	// goes through at once. Holding it keeps the system believing the button is
+	// down, and everything the pointer does in that time becomes a drag - that
+	// is what users felt as the button sticking.
 	// ------------------------------------------------------------------
 	reset_state(&manager);
 
-	MouseEvent drag_down = make_event(MOUSE_BUTTON_LEFT, 3000, true, 100, 100, 0);
-	MouseEvent drag_up = make_event(MOUSE_BUTTON_LEFT, 3300, false, 100, 100, 0);
+	MouseEvent long_down = make_event(MOUSE_BUTTON_LEFT, 3000, true, 100, 100, 0);
+	MouseEvent long_up = make_event(MOUSE_BUTTON_LEFT, 3300, false, 100, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &long_down));
+	CHECK(!debounce_process_event(&manager, &long_up));
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+	CHECK(!debounce_has_pending_deferrals(&manager));
+
+	// ------------------------------------------------------------------
+	// A drag is long AND moved. Only then is the release held back, so that a
+	// chattering switch cannot end the drag early.
+	// ------------------------------------------------------------------
+	reset_state(&manager);
+
+	MouseEvent drag_down = make_event(MOUSE_BUTTON_LEFT, 3400, true, 100, 100, 0);
+	MouseEvent drag_up = make_event(MOUSE_BUTTON_LEFT, 3700, false, 140, 100, 0);
 
 	CHECK(!debounce_process_event(&manager, &drag_down));
 	CHECK(debounce_process_event(&manager, &drag_up));
@@ -134,7 +151,7 @@ void test_smart_drag_run(void)
 	// timer together with that release. It is deliberately not passed straight
 	// through: the release has to reach the system first, and injecting it from
 	// here - inside the hook callback - is what used to freeze the whole process.
-	MouseEvent drag_down2 = make_event(MOUSE_BUTTON_LEFT, 3400, true, 100, 100, 0);
+	MouseEvent drag_down2 = make_event(MOUSE_BUTTON_LEFT, 3720, true, 140, 100, 0);
 	CHECK(debounce_process_event(&manager, &drag_down2));
 	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
@@ -147,18 +164,28 @@ void test_smart_drag_run(void)
 	CHECK(!debounce_has_pending_work(&manager));
 
 	// ------------------------------------------------------------------
-	// Moving further than the drag distance also defers the release
+	// A short press that moved is a flick, not a drag: released at once
 	// ------------------------------------------------------------------
 	reset_state(&manager);
 
-	MouseEvent move_down = make_event(MOUSE_BUTTON_LEFT, 4000, true, 100, 100, 0);
-	MouseEvent move_up = make_event(MOUSE_BUTTON_LEFT, 4060, false, 110, 100, 0);
+	MouseEvent flick_down = make_event(MOUSE_BUTTON_LEFT, 4000, true, 100, 100, 0);
+	MouseEvent flick_up = make_event(MOUSE_BUTTON_LEFT, 4060, false, 140, 100, 0);
 
-	CHECK(!debounce_process_event(&manager, &move_down));
-	CHECK(debounce_process_event(&manager, &move_up));
+	CHECK(!debounce_process_event(&manager, &flick_down));
+	CHECK(!debounce_process_event(&manager, &flick_up));
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+	CHECK(!debounce_has_pending_deferrals(&manager));
+
+	// Disabling the hybrid heuristic must deliver a pending release
+	reset_state(&manager);
+
+	MouseEvent held_down = make_event(MOUSE_BUTTON_LEFT, 5000, true, 100, 100, 0);
+	MouseEvent held_up = make_event(MOUSE_BUTTON_LEFT, 5300, false, 140, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &held_down));
+	CHECK(debounce_process_event(&manager, &held_up));
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 
-	// Disabling the hybrid heuristic must deliver the pending release
 	debounce_set_hybrid_heuristic(&manager, false);
 	CHECK(!debounce_has_pending_deferrals(&manager));
 
@@ -204,8 +231,9 @@ void test_smart_drag_run(void)
 	debounce_set_monitored(&manager, MOUSE_BUTTON_LEFT, true);
 	reset_state(&manager);
 
+	// Long and moved: a drag, so the release really is held back here
 	MouseEvent off_down = make_event(MOUSE_BUTTON_LEFT, 10000, true, 100, 100, 0);
-	MouseEvent off_up = make_event(MOUSE_BUTTON_LEFT, 10400, false, 100, 100, 0);
+	MouseEvent off_up = make_event(MOUSE_BUTTON_LEFT, 10400, false, 140, 100, 0);
 
 	CHECK(!debounce_process_event(&manager, &off_down));
 	CHECK(debounce_process_event(&manager, &off_up));
@@ -232,7 +260,7 @@ void test_smart_drag_run(void)
 	reset_state(&manager);
 
 	MouseEvent reset_down = make_event(MOUSE_BUTTON_LEFT, 14000, true, 100, 100, 0);
-	MouseEvent reset_up = make_event(MOUSE_BUTTON_LEFT, 14400, false, 100, 100, 0);
+	MouseEvent reset_up = make_event(MOUSE_BUTTON_LEFT, 14400, false, 140, 100, 0);
 
 	CHECK(!debounce_process_event(&manager, &reset_down));
 	CHECK(debounce_process_event(&manager, &reset_up));
@@ -249,7 +277,7 @@ void test_smart_drag_run(void)
 	reset_state(&manager);
 
 	MouseEvent all_down = make_event(MOUSE_BUTTON_LEFT, 16000, true, 100, 100, 0);
-	MouseEvent all_up = make_event(MOUSE_BUTTON_LEFT, 16400, false, 100, 100, 0);
+	MouseEvent all_up = make_event(MOUSE_BUTTON_LEFT, 16400, false, 140, 100, 0);
 
 	CHECK(!debounce_process_event(&manager, &all_down));
 	CHECK(debounce_process_event(&manager, &all_up));
@@ -270,6 +298,12 @@ void test_smart_drag_run(void)
 	CHECK(manager.dragHoldTimeMs == DRAG_HOLD_TIME_DEFAULT_MS);
 	CHECK(manager.dragDistancePx == DRAG_DISTANCE_DEFAULT_PX);
 
+	// The delay is time the system spends still believing the button is down, so
+	// the default has to stay short and has to be offered in the menu as is:
+	// otherwise the smallest thing a user can pick is worse than the default.
+	CHECK(RELEASE_DELAY_DEFAULT_MS == 20);
+	CHECK(config_release_delay_presets()[0] == RELEASE_DELAY_DEFAULT_MS);
+
 	debounce_set_release_delay(&manager, 80, RELEASE_DELAY_MIN_MS, RELEASE_DELAY_MAX_MS);
 	CHECK(manager.releaseDelayMs == 80);
 
@@ -283,12 +317,13 @@ void test_smart_drag_run(void)
 	debounce_set_drag_distance(&manager, 0, DRAG_DISTANCE_MIN_PX, DRAG_DISTANCE_MAX_PX);
 	CHECK(manager.dragDistancePx == 10);
 
-	// A larger drag distance must not defer a 6 px release any more
+	// Both presses here are long, so only the distance decides. A larger drag
+	// distance must not defer a 6 px release any more.
 	reset_state(&manager);
 	debounce_set_hybrid_heuristic(&manager, true);
 
 	MouseEvent wide_down = make_event(MOUSE_BUTTON_LEFT, 18000, true, 100, 100, 0);
-	MouseEvent wide_up = make_event(MOUSE_BUTTON_LEFT, 18060, false, 106, 100, 0);
+	MouseEvent wide_up = make_event(MOUSE_BUTTON_LEFT, 18400, false, 106, 100, 0);
 
 	CHECK(!debounce_process_event(&manager, &wide_down));
 	CHECK(!debounce_process_event(&manager, &wide_up));
@@ -299,7 +334,7 @@ void test_smart_drag_run(void)
 	reset_state(&manager);
 
 	MouseEvent tight_down = make_event(MOUSE_BUTTON_LEFT, 19000, true, 100, 100, 0);
-	MouseEvent tight_up = make_event(MOUSE_BUTTON_LEFT, 19060, false, 106, 100, 0);
+	MouseEvent tight_up = make_event(MOUSE_BUTTON_LEFT, 19400, false, 106, 100, 0);
 
 	CHECK(!debounce_process_event(&manager, &tight_down));
 	CHECK(debounce_process_event(&manager, &tight_up));
@@ -312,8 +347,8 @@ void test_smart_drag_run(void)
 	debounce_set_defer_available(&manager, true);
 
 	MouseEvent replay_down = make_event(MOUSE_BUTTON_LEFT, 20000, true, 100, 100, 0);
-	MouseEvent replay_up = make_event(MOUSE_BUTTON_LEFT, 20300, false, 100, 100, 0);
-	MouseEvent replay_press = make_event(MOUSE_BUTTON_LEFT, 20340, true, 100, 100, 0);
+	MouseEvent replay_up = make_event(MOUSE_BUTTON_LEFT, 20300, false, 140, 100, 0);
+	MouseEvent replay_press = make_event(MOUSE_BUTTON_LEFT, 20340, true, 140, 100, 0);
 
 	CHECK(!debounce_process_event(&manager, &replay_down));
 	CHECK(debounce_process_event(&manager, &replay_up));
@@ -351,8 +386,9 @@ void test_smart_drag_run(void)
 	reset_state(&manager);
 	g_injected_count = 0;
 
+	// Long and moved, so this release is held back and there is something to replay
 	MouseEvent replay2_down = make_event(MOUSE_BUTTON_LEFT, 22000, true, 300, 200, 0);
-	MouseEvent replay2_up = make_event(MOUSE_BUTTON_LEFT, 22300, false, 300, 200, 0);
+	MouseEvent replay2_up = make_event(MOUSE_BUTTON_LEFT, 22300, false, 340, 200, 0);
 	MouseEvent replay2_press = make_event(MOUSE_BUTTON_LEFT, 22340, true, 305, 205, 0);
 
 	CHECK(!debounce_process_event(&manager, &replay2_down));

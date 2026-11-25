@@ -901,9 +901,9 @@ static void test_debounce_decision(void)
 	CHECK(!debounce_process_event_ex(&manager, &switched_off, &decision));
 	CHECK(decision.reason == DEBOUNCE_REASON_IGNORE_UNMONITORED);
 
-	// Smart Drag: a long hold defers the release, and the press that follows
-	// delivers it before it is judged - that press is a real user action and must
-	// never be reported as a bounce.
+	// Smart Drag: a press that was long and moved is a drag, its release is held
+	// back, and the press that follows delivers it before it is judged - that
+	// press is a real user action and must never be reported as a bounce.
 	debounce_set_hybrid_heuristic(&manager, true);
 
 	MouseEvent hold_down = {0};
@@ -917,7 +917,7 @@ static void test_debounce_decision(void)
 	hold_up.button = MOUSE_BUTTON_LEFT;
 	hold_up.is_down = false;
 	hold_up.timestamp = 4300;
-	hold_up.x = 10;
+	hold_up.x = 40;
 	hold_up.y = 10;
 
 	CHECK(!debounce_process_event_ex(&manager, &hold_down, &decision));

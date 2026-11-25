@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.2.1-blue.svg)
+![Version](https://img.shields.io/badge/version-2.2.2-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-informational.svg)
 ![Toolset](https://img.shields.io/badge/toolset-MSVC%20v145-purple.svg)
@@ -91,9 +91,10 @@ What it does:
   wheel, horizontal wheel. Each can be enabled, disabled and tuned on its own.
 * **Per-button thresholds** — three presets (Game 40 ms / Office 50 ms / Strict
   60 ms) plus a custom value per button.
-* **Smart Drag** — tells a click from a drag by hold time and cursor movement,
-  holds the release back briefly and then re-injects it, so a bouncing switch
-  cannot break a drag.
+* **Smart Drag** — only a press that was held long **and** moved counts as a
+  drag. Its release is held back briefly and then re-injected, so a bouncing
+  switch cannot break the drag; a plain click is released immediately, so nothing
+  feels stuck to the pointer.
 * **Check-up window** — read-only. Shows every verdict the engine made, click by
   click, plus the *near misses*: presses that passed but only just cleared the
   threshold. "0 blocked, 7 near misses" means the switch is already failing.
@@ -120,8 +121,8 @@ MouseMend 常驻托盘，在软件层过滤鼠标事件流，让磨损的开关�
   每个都能单独启用、单独调阈值。
 * **逐键阈值** —— 三档预设（游戏 40 ms / 办公 50 ms / 严格 60 ms），
   也可以为每个键单独填自定义值。
-* **智能拖拽** —— 靠"按住时长 + 光标位移"区分点击和拖拽，真实拖拽的松手会先
-  扣住再补发，弹跳打断不了拖拽。
+* **智能拖拽** —— 只有**按得久而且移动过**才算拖拽。真实拖拽的松手会先扣住一小会儿
+  再补发，弹跳打断不了拖拽；普通点击一律立即放行，不会有"粘连"感。
 * **鼠标体检窗口** —— 只读。逐次点击告诉你引擎怎么判的，还有**临界点击**：
   那些放行了、但只是勉强过线的按下。"拦截 0 次、临界 7 次"说明鼠标已经在坏。
 * **不打扰** —— 拦截气泡默认关闭，最快 20 秒一次；鼠标停在托盘图标上就能看状态。

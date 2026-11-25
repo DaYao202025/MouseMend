@@ -29,7 +29,12 @@ typedef enum
 // Smart Drag Protection: delay applied to a deferred release
 #define RELEASE_DELAY_MIN_MS 0
 #define RELEASE_DELAY_MAX_MS 200
-#define RELEASE_DELAY_DEFAULT_MS 50
+// Short on purpose. The release is held back to outlast a chattering switch,
+// and while it is held the system still thinks the button is down - so every
+// millisecond here is a millisecond of window drag or text selection that the
+// user did not ask for. Twenty is already longer than a bounce and short enough
+// to be lost between two frames.
+#define RELEASE_DELAY_DEFAULT_MS 20
 #define RELEASE_DELAY_PRESET_COUNT 3
 
 // Smart Drag Protection: movement (in pixels) above which a press counts as a drag

@@ -170,7 +170,8 @@ else {
     Start-Sleep -Milliseconds 500
 
     $settings = Get-ItemProperty -Path $regPath
-    Check 'ReleaseDelay restored' $settings.ReleaseDelay 50
+    # Mirrors RELEASE_DELAY_DEFAULT_MS in src/core/config.h
+    Check 'ReleaseDelay restored' $settings.ReleaseDelay 20
     Check 'DragDistance restored' $settings.DragDistance 5
     Check 'Btn1_Threshold restored' $settings.Btn1_Threshold 50
     Check 'Btn0_Enabled still on' $settings.Btn0_Enabled 1

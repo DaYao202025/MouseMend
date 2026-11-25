@@ -201,6 +201,13 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_VERSION_NOTES_TEXT] =
 		L"Only published versions are listed, newest first.\n"
 		L"\n"
+		L"2.2.2  Fixed the button feeling stuck. Smart Drag used to hold a release\n"
+		L"       back when the press was long *or* had moved, and while it was held\n"
+		L"       the system still thought the button was down - so moving the mouse\n"
+		L"       dragged the window or extended a selection. Only a press that was\n"
+		L"       long *and* moved now counts as a drag; an ordinary click is\n"
+		L"       released at once. The hold is 20 ms instead of 50.\n"
+		L"\n"
 		L"2.2.1  The click ring is smoother: it runs at 60 frames a second, grows\n"
 		L"       from thick to thin, and fades into the background rather than to\n"
 		L"       white. A single letter sits in the middle - L, M or R - so the\n"
@@ -427,6 +434,10 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_VERSION_NOTES_TITLE] = L"每个版本修了什么。",
 	[STR_VERSION_NOTES_TEXT] =
 		L"只列公开发布过的版本，新的在上面。\n"
+		L"\n"
+		L"2.2.2  修复左键粘连：智能拖拽原来只要「按得久」或「移动过」就扣住松手，\n"
+		L"       扣住期间系统仍认为按键是按下的，一动鼠标就拖窗口、拉选区。现在两个\n"
+		L"       条件都满足才算拖拽，普通点击立即放行；扣留时间 50 → 20 毫秒。\n"
 		L"\n"
 		L"2.2.1  点击光环更顺：60 帧、由粗变细、淡向背景色而不是白色；圆心多了\n"
 		L"       一个字（左 / 中 / 右），不用再靠颜色区分按键。\n"

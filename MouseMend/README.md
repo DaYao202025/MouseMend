@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.2.1-blue.svg)
+![Version](https://img.shields.io/badge/version-2.2.2-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-informational.svg)
 ![Toolset](https://img.shields.io/badge/toolset-MSVC%20v145-purple.svg)
@@ -53,10 +53,12 @@ presses match the *intended* presses.
   disabled and tuned separately.
 * **Per-button thresholds** — three presets (Game 40 ms / Office 50 ms /
   Strict 60 ms) plus a custom value per button.
-* **Smart Drag (Hybrid Heuristic)** — distinguishes a click from a drag by
-  checking how long the button was held and how far the cursor moved. A release
-  that follows a real drag is delayed and then re-injected, so a bouncing switch
-  cannot break the drag. Both the hold time and the distance are configurable.
+* **Smart Drag (Hybrid Heuristic)** — a press counts as a drag only when it was
+  held long **and** moved. A release that follows such a drag is held back for a
+  moment (20 ms by default) and then re-injected, so a bouncing switch cannot
+  break the drag. A plain click is released immediately: the system is never left
+  believing the button is still down, which is what used to make the pointer feel
+  stuck to the click. Both the hold time and the distance are configurable.
 * **Check-up window** — a read-only window that shows what the engine is
   actually deciding, click by click: time, button, the gap that was measured,
   the hold time and the verdict. It also lists the false clicks that were
@@ -247,8 +249,10 @@ MouseMend 常驻托盘，在软件层过滤鼠标事件流 —— 让磨损的�
   水平滚轮。每个轴都可以单独启用、单独调阈值。
 * **逐键阈值** —— 三档预设（游戏 40 ms / 办公 50 ms / 严格 60 ms），也可以为
   每个键单独填自定义值。
-* **智能拖拽（混合启发式）** —— 靠"按住时长 + 光标位移"区分点击和拖拽。真实拖拽
-  之后的松手会被扣住一小段再补发，弹跳就打断不了拖拽。按住时长和位移距离都可调。
+* **智能拖拽（混合启发式）** —— 按住时长**和**光标位移**两个条件都满足**才算拖拽。
+  拖拽之后的松手会被扣住一小段（默认 20 ms）再补发，弹跳就打断不了拖拽；普通点击
+  立即放行，系统不会停留在"按键还按着"的状态，也就不会有粘连感。按住时长和位移
+  距离都可调。
 * **鼠标体检窗口** —— 只读窗口，逐次点击告诉你引擎到底怎么判的：时间、按键、
   实测间隔、按住时长、判定结果。同时列出被拦下的误触、引擎当时用的证据，以及
   一份自检报告。
@@ -588,7 +592,7 @@ Released under the MIT licence — see [LICENSE](LICENSE).<br>
 
 <div align="center">
 
-**MouseMend 2.2.1** — MIT licensed, built with plain C and the Win32 API.<br>
-**MouseMend 2.2.1** —— MIT 许可证，纯 C 与 Win32 API 实现。
+**MouseMend 2.2.2** — MIT licensed, built with plain C and the Win32 API.<br>
+**MouseMend 2.2.2** —— MIT 许可证，纯 C 与 Win32 API 实现。
 
 </div>

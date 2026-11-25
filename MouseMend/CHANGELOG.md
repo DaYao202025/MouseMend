@@ -1,5 +1,37 @@
 # Changelog / 更新记录
 
+## 2.2.2 — 2026-11-25
+
+### 修复 / Fixed
+
+- **左键"粘连"（这次的主要问题）** —— 智能拖拽原来用「按得久 **或** 移动超过
+  5 像素」判断拖拽，两条只要中一条就把松手扣住 50 ms 再补发。**这 50 ms 里系统
+  仍然认为左键是按下的**，于是手一动就会拖动窗口、拉长文字选区，一次普通单击被
+  感受成长按。
+  现在改成**两个条件都满足**才算拖拽（按得久 **而且** 移动过），普通点击立即放行，
+  系统不会停留在"按键还按着"的状态。默认扣留时间同时从 50 ms 降到 **20 ms**，
+  真实拖拽结束时的尾巴也缩短到几乎察觉不到；预设改为 20 / 40 / 80 ms。
+  A release is only held back when the press was long **and** moved. It used to be
+  "either one", which charged every ordinary click that drifted a few pixels with
+  50 ms of the button staying down - the window kept following the cursor and the
+  text kept selecting. The default hold is now 20 ms.
+- **测试** —— 五处断言按新判据更新（长按不动、短按移动都不再算拖拽），并新增
+  "长按且移动才算拖拽"的用例。这是**有意的行为变更**，不是把测试改到通过。
+
+### 说明 / Notes
+
+- 已装过的机器上保存的仍是旧值（`ReleaseDelay=50`），设置不会被静默改写：
+  到 托盘 → 高级 → 释放延迟 选 20（或点 恢复默认）即可。
+  Previously saved settings are left alone: pick 20 in the tray menu, or restore
+  defaults.
+
+### 验证 / Verified
+
+Debug / Release × x64 / x86 全量构建零告警（含 `/analyze`）；单测 2713 条通过；
+`e2e` 与 `diagnose` 各 0 failure。
+
+---
+
 ## 2.2.1 — 2026-11-25
 
 ### 改进 / Changed
