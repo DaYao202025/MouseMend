@@ -1,5 +1,38 @@
 # Changelog / 更新记录
 
+## 2.1.3 — 2026-11-25
+
+### 修复 / Fixed
+
+- **卡死（重要）** —— `SendInput` 原来是在低级鼠标钩子的回调里被调用的。低级钩子跑在
+  安装它的那个线程上，而注入的事件又要再过一遍钩子链，链头正是这个线程自己 —— 自等待，
+  永不返回。表现是：**全系统鼠标卡滞两三秒**（`LowLevelHooksTimeout` 到期摘掉钩子），
+  之后**只有这个程序点不动**，进程结束不掉，只能注销或重启。触发条件是"松手被推迟时
+  又来了一次按下"，在绘图、设计类软件里是很常见的操作。
+  现在钩子回调只改状态，注入交给一直存在的推迟松手定时器（同线程，但在回调之外）。
+  Injection no longer happens inside the low-level hook callback, which deadlocked
+  the calling thread against itself and could only be cleared by signing out.
+
+### 新增 / Added
+
+- **卡死报告** —— 以前卡死什么都不留（走不到崩溃处理器）。现在有看门狗线程盯着窗口
+  心跳，安静超过 10 秒就自动生成 `MouseMend-hang-<时间>.zip`（minidump + 文字报告），
+  下次启动用托盘气泡告知路径。**它救不了卡死的进程，只是让下次有证据。**
+  A watcher thread now writes a hang bundle, so a frozen process leaves evidence
+  behind for the first time.
+
+### 变更 / Changed
+
+- 自检提示里的"发给客服"改为"发给作者"（英文 `support` → `the author`）。
+- 手动导出的诊断包改名为 `MouseMend-diagnostics-<时间>.zip`（原 `MouseMend-support-`）。
+
+### 验证 / Verified
+
+Debug 与 Release × x64 / x86 全量构建零告警（含 `/analyze`）；2594 条断言通过；
+`e2e` 与 `diagnose` 冒烟各 0 failure；看门狗经"只挂起 UI 线程"实测，15 秒内产出报告。
+
+---
+
 ## 2.1.2 — 2026-11-23
 
 > 2.1.0 与 2.1.1 是内部阶段版本，没有发布；2.1.2 是 2.0.0 之后的第一个发布版。

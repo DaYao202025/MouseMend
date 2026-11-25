@@ -26,6 +26,11 @@
 // a file it did not create.
 #define SUPPORT_PREFIX_CRASH L"MouseMend-crash"
 
+// Written by the hang watchdog: the window stopped responding but the process
+// is still alive. A different prefix on purpose - "crash" would send the reader
+// looking for an exception record that does not exist.
+#define SUPPORT_PREFIX_HANG L"MouseMend-hang"
+
 // Used to be "MouseMend-support". Renamed because there is no support desk to
 // speak of: one person writes this, and a file called "support" reads like a
 // ticket number. Bundles written by older versions keep the old name - pruning
@@ -51,6 +56,7 @@ typedef struct
 
 	// What happened
 	bool crashed;
+	bool hung;	   // The window stopped responding, written by the hang watchdog
 	bool complete; // false when a value could not be read without waiting
 	uint32_t exception_code;
 	uint64_t exception_address;

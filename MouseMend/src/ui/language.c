@@ -151,6 +151,7 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_EXPORT_SUPPORT_DONE_FMT] = L"Diagnostics saved to:\n%s\n\nSend this file to the author.",
 	[STR_EXPORT_SUPPORT_FAILED] = L"Could not write the file: no folder was writable. Move MouseMend somewhere else (for example D:\\ or your desktop) and try again.",
 	[STR_CRASH_REPORT_FOUND_FMT] = L"The program closed unexpectedly last time.\nA report was saved to:\n%s\n\nPlease send it to the author.",
+	[STR_HANG_REPORT_FOUND_FMT] = L"The program stopped responding last time and had to be signed out.\nA report was saved to:\n%s\n\nPlease send it to the author.",
 };
 
 // Simplified Chinese strings
@@ -296,6 +297,7 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_EXPORT_SUPPORT_DONE_FMT] = L"诊断包已保存到：\n%s\n\n请把这个文件发给作者。",
 	[STR_EXPORT_SUPPORT_FAILED] = L"导出失败：没有可写的文件夹。请把程序挪到别处（比如 D 盘或桌面）再试一次。",
 	[STR_CRASH_REPORT_FOUND_FMT] = L"上次程序异常退出了。\n诊断包已保存到：\n%s\n\n请把它发给作者。",
+	[STR_HANG_REPORT_FOUND_FMT] = L"上次程序卡住了（窗口不再响应），只能注销才能结束。\n诊断包已保存到：\n%s\n\n请把它发给作者。",
 };
 
 // Button names, indexed by MouseButton

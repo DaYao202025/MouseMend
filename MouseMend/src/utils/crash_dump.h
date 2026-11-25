@@ -25,3 +25,10 @@ void crash_dump_install(void);
 
 // Register the collector above. Call before crash_dump_install.
 void crash_dump_set_report_collector(CrashReportCollectFn collector);
+
+// Write a minidump of this process into %TEMP% and return its path.
+//
+// Used by the hang watchdog: a hang has no exception record, but the stacks are
+// still the only thing that says where the program stopped listening. Caller
+// owns the file and has to delete it.
+bool crash_dump_write_current(wchar_t *path, size_t path_count);

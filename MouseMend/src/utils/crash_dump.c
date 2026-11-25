@@ -211,3 +211,21 @@ void crash_dump_install(void)
 	g_installed = true;
 	SetUnhandledExceptionFilter(crash_dump_filter);
 }
+
+bool crash_dump_write_current(wchar_t *path, size_t path_count)
+{
+	if (!path || path_count == 0)
+		return false;
+
+	path[0] = L'\0';
+
+	wchar_t temp[MAX_PATH];
+	DWORD length = GetTempPathW(ARRAYSIZE(temp), temp);
+
+	if (length == 0 || length >= ARRAYSIZE(temp))
+		return false;
+
+	// No exception record: this is a hang, not a fault. The dump still carries
+	// every thread's stack, which is the only thing that says where a hang is.
+	return write_dump_to(temp, NULL, path, path_count);
+}

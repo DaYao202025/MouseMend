@@ -38,6 +38,7 @@
 #include "src/ui/settings_window.h"
 #include "src/ui/about_window.h"
 #include "src/utils/autostart.h"
+#include "src/utils/hang_watchdog.h"
 #include "src/utils/crash_dump.h"
 #include "src/utils/diagnostics.h"
 #include "src/utils/logger.h"
@@ -558,8 +559,19 @@ static void ExportSupportBundle(void)
 static void NotifyPreviousCrash(void)
 {
 	wchar_t path[MAX_PATH];
-	if (!support_bundle_find_newest(SUPPORT_PREFIX_CRASH, path, ARRAYSIZE(path)))
+	LangStringId message = STR_CRASH_REPORT_FOUND_FMT;
+
+	// A hang is reported in preference to a crash: it is the case where the
+	// process stayed alive and left no exception behind, which is the one the
+	// user is least likely to be able to describe.
+	if (support_bundle_find_newest(SUPPORT_PREFIX_HANG, path, ARRAYSIZE(path)))
+	{
+		message = STR_HANG_REPORT_FOUND_FMT;
+	}
+	else if (!support_bundle_find_newest(SUPPORT_PREFIX_CRASH, path, ARRAYSIZE(path)))
+	{
 		return;
+	}
 
 	wchar_t notified[MAX_PATH];
 	ReadLastCrashNotice(notified, ARRAYSIZE(notified));
@@ -573,7 +585,7 @@ static void NotifyPreviousCrash(void)
 		return;
 
 	wchar_t text[TRAY_BALLOON_MAX_CHARS * 2];
-	StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_CRASH_REPORT_FOUND_FMT), path);
+	StringCchPrintfW(text, ARRAYSIZE(text), lang_str(message), path);
 	tray_icon_show_balloon(&g_app.tray_icon, APP_NAME_W, text, NIIF_INFO);
 }
 
@@ -677,6 +689,15 @@ static bool InitializeApp(void)
 #ifndef NDEBUG
 	LOG_INFO(&g_app.logger, "Mouse hook installed successfully");
 #endif
+
+	// Start watching for a hang. Before this point the message loop has never
+	// run, so a heartbeat would be missing for a reason that is not a hang.
+	if (!hang_watchdog_start(CollectSupportReport))
+	{
+#ifndef NDEBUG
+		LOG_ERROR(&g_app.logger, "Hang watchdog could not be started");
+#endif
+	}
 
 	// Initialize tray icon
 	if (!tray_icon_init(&g_app.tray_icon, g_app.hWnd, g_app.hInstance, IDI_NOTIFYICON))
@@ -810,6 +831,10 @@ static void ShutdownApp(void)
 		KillTimer(g_app.hWnd, TIMER_WATCHDOG);
 		KillTimer(g_app.hWnd, TIMER_STATE);
 	}
+
+	// Stop watching before anything it reads is torn down. Bounded internally:
+	// a shutdown must never wait on the watchdog.
+	hang_watchdog_stop();
 
 	// Close the optional settings window before the modules it reads disappear
 	settings_window_close(&g_app.settings);
@@ -1408,6 +1433,12 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 		}
 		else if (wParam == TIMER_STATE)
 		{
+			// Silence here is what makes the hang watchdog write a report. This
+			// timer is the cheapest honest heartbeat there is: it only runs when
+			// the message loop does, which is exactly the thing that stops when
+			// the program hangs.
+			hang_watchdog_beat();
+
 			// Write the settings 400 ms after the last change, so dragging a
 			// slider does not turn into hundreds of registry writes
 			if (g_app.debounce_ready)

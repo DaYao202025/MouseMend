@@ -42,6 +42,9 @@
     <ClCompile Include="src\utils\support_bundle.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\utils\hang_watchdog.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\utils\zip_writer.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -129,6 +132,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\utils\support_bundle.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\utils\hang_watchdog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\utils\zip_writer.h">

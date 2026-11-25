@@ -79,6 +79,11 @@ presses match the *intended* presses.
   settings in force and the exception itself. Attaching that one file is the
   whole bug report, and no Event Viewer, folder hunt or debugger is involved.
   Older bundles are pruned, so a crash loop leaves three files, not thirty.
+* **One-file hang report** — a program that stops answering never reaches the
+  crash handler, so it used to leave nothing behind at all. A watcher thread
+  notices ten seconds of silence from the window and writes the same kind of
+  zip, named `MouseMend-hang-<time>.zip`, before the user gives up and signs
+  out. The next start says where it went.
 * **Export diagnostics on demand** — the same bundle from the tray menu while the
   program is still healthy. Asking a user for evidence should never require
   reproducing the fault first.
@@ -194,7 +199,8 @@ Windows drop the hook.
 
 No network access, no telemetry, no analytics, no update check. The only files it
 ever writes are its own settings in the registry, an optional blocked-click log,
-and the diagnostics bundle: on a crash, or when you ask for one from the menu. A
+and the diagnostics bundle: on a crash, on a hang, or when you ask for one from
+the menu. A
 bundle is never uploaded anywhere by the program - it appears on disk and stays
 there until you decide what to do with it. Nothing leaves the machine.
 
@@ -249,6 +255,10 @@ MouseMend 常驻托盘，在软件层过滤鼠标事件流 —— 让磨损的�
   minidump、最近 96 条判定的文字时间线、当时的全部设置和异常信息。让用户发这一个
   文件就够，不用找事件查看器、不用翻用户目录、不用调试器。旧文件自动清理，
   反复崩溃最多留 3 个。
+* **一个文件搞定卡死报告** —— 程序卡死（窗口不再响应）时根本走不到崩溃处理器，
+  以前是什么证据都不留。现在有个看门狗线程盯着窗口的心跳，**安静超过 10 秒**就
+  自动生成同样的一份 zip，文件名 `MouseMend-hang-<时间>.zip`，用户不必等到注销
+  才发现东西没了。下次启动会告诉他文件在哪。
 * **随时手动导出诊断包** —— 程序还正常的时候也能从托盘菜单导出同一份报告。
   找用户要证据，不该以"先复现一次"为前提。
 
@@ -311,13 +321,18 @@ MouseMend-x64.exe --diagnose    打印只读自检报告后退出
 或者只读 U 盘上），会依次退到桌面、`%LOCALAPPDATA%\MouseMend`、`%TEMP%` ——
 宁可换个地方，也不能一条证据都没有。
 
-程序崩溃时生成的是 `MouseMend-crash-<时间>.zip`，并且**下次启动时用托盘气泡
-告诉你它在哪**，只提示一次，不会反复打扰。
+程序崩溃时生成的是 `MouseMend-crash-<时间>.zip`，卡死时生成的是
+`MouseMend-hang-<时间>.zip`，两种都**在下次启动时用托盘气泡告诉你它在哪**，
+只提示一次，不会反复打扰。
+
+卡死为什么单独一种名字：它没有异常代码，进程当时还活着，硬按"崩溃"去查会找不到
+任何异常记录。看门狗的判定是**窗口连续 10 秒没有心跳**（心跳来自 200 ms 的状态
+定时器），所以只有消息循环真的停了才会写，机器偶尔卡顿不会误报。
 
 | 包里有什么 | 说明 |
 | :--- | :--- |
 | `report.txt` | 版本、系统、异常代码与地址（含所属模块和偏移）、当时的全部设置、钩子健康度、句柄 / GDI / USER 对象数、最近 96 条鼠标判定（按键、方向、坐标、间隔、阈值、判决） |
-| `crash.dmp` | 崩溃时的最小转储，只有崩溃才有。它保存了各线程的栈和模块表，足以定位到出错的函数 |
+| `crash.dmp` | 崩溃或卡死时的最小转储，手动导出时没有。它保存了各线程的栈和模块表，足以定位到出错的函数——卡死时这是**唯一**能说明它停在哪儿的证据 |
 | `README.txt` | 中文说明，含隐私提醒 |
 
 手动导出时没有 `crash.dmp` —— 健康进程的转储除了让文件变大没有别的用处。
@@ -327,6 +342,10 @@ MouseMend-x64.exe --diagnose    打印只读自检报告后退出
 
 **已知盲区**：如果崩溃是栈溢出，这套机制可能什么也拿不到 —— 写报告本身也需要
 栈。那种情况只能靠系统事件日志。
+
+另一个曾经的盲区已经补上了：卡死以前什么都不留（走不到崩溃处理器）。现在由看门狗
+负责，但**看门狗救不了卡死的进程** —— 线程一旦陷在内核里，用户态没有任何办法让它
+出来，只能注销或重启。它的价值是让"下次"有证据。
 
 ### 设置存在哪
 

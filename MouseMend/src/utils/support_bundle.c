@@ -237,7 +237,8 @@ bool support_bundle_build_text(const SupportReport *report, char *buffer, size_t
 	append(buffer, buffer_count, "%s %s support report\n", APP_NAME, APP_VERSION_STRING);
 	append(buffer, buffer_count, "=====\n\n");
 	append(buffer, buffer_count, "generated   : %s\n", generated);
-	append(buffer, buffer_count, "kind        : %s\n", report->crashed ? "crash" : "manual export");
+	append(buffer, buffer_count, "kind        : %s\n",
+		   report->hung ? "hang" : (report->crashed ? "crash" : "manual export"));
 	append(buffer, buffer_count, "version     : %s (%s)\n", APP_VERSION_STRING, arch);
 	append(buffer, buffer_count, "exe         : %s\n", exe);
 	append(buffer, buffer_count, "os          : %s\n", os);
@@ -481,8 +482,8 @@ static void prune_old_bundles(const wchar_t *directory, const wchar_t *prefix)
 	}
 }
 
-bool support_bundle_write(SupportReport *report, const wchar_t *dump_source,
-						  wchar_t *path, size_t path_count)
+static bool support_bundle_write_inner(SupportReport *report, const wchar_t *dump_source,
+									   wchar_t *path, size_t path_count)
 {
 	// Static on purpose: this runs inside the crash handler, where the stack may
 	// be the very thing that failed. Only one bundle is ever built at a time.
@@ -503,7 +504,9 @@ bool support_bundle_write(SupportReport *report, const wchar_t *dump_source,
 		return false;
 
 	size_t readme_length = build_readme(readme, sizeof(readme));
-	const wchar_t *prefix = report->crashed ? SUPPORT_PREFIX_CRASH : SUPPORT_PREFIX_MANUAL;
+	const wchar_t *prefix = report->hung      ? SUPPORT_PREFIX_HANG
+							: report->crashed ? SUPPORT_PREFIX_CRASH
+											  : SUPPORT_PREFIX_MANUAL;
 
 	wchar_t directories[SUPPORT_DIR_COUNT][MAX_PATH];
 	int directory_count = build_candidates(directories, SUPPORT_DIR_COUNT);
@@ -543,6 +546,25 @@ bool support_bundle_write(SupportReport *report, const wchar_t *dump_source,
 	}
 
 	return false;
+}
+
+bool support_bundle_write(SupportReport *report, const wchar_t *dump_source,
+						  wchar_t *path, size_t path_count)
+{
+	// One bundle at a time. The renderer keeps its buffers in statics, and there
+	// are two callers now: the crash handler and the hang watchdog. Letting both
+	// in at once would produce a file neither of them wrote, so the loser gets
+	// false and keeps whatever it staged on its own - the dump is written to
+	// %TEMP% first, so nothing is lost that cannot be recovered.
+	static volatile LONG busy = 0;
+
+	if (InterlockedExchange(&busy, 1) != 0)
+		return false;
+
+	bool ok = support_bundle_write_inner(report, dump_source, path, path_count);
+
+	InterlockedExchange(&busy, 0);
+	return ok;
 }
 
 bool support_bundle_find_newest(const wchar_t *prefix, wchar_t *path, size_t path_count)
