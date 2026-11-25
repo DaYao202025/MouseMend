@@ -1,5 +1,29 @@
 # Changelog / 更新记录
 
+## 2.2.0 — 2026-11-25
+
+### 新增 / Added
+
+- **判定说明** —— 测试日志分组右上角加了一个圆形「!」，点开是判定列每个取值的完整解释：
+  通过、通过+补发、程序模拟、推迟松手、四种拦截、此键未防护、滚轮无位移。窗口里以前
+  只显示这些词，没有任何地方说明它们的意思。
+  The verdict column is now explained: a round "!" beside the log header opens a
+  glossary of every value it can show.
+- **版本说明** —— 已拦截的误触分组右上角加了「版本说明」，列出 2.0.0 以来每个公开版本
+  修了什么，并注明 2.1.0 / 2.1.1 是内部版本、没有发布。
+  A "Versions" button lists what each published release fixed.
+
+### 说明 / Notes
+
+两个窗体共用一套模板：正文放在只读编辑框里，长文可以滚动、可以选中复制，跟随界面语言。
+
+### 验证 / Verified
+
+Debug 与 Release × x64 / x86 全量构建零告警（含 `/analyze`）；单测通过；`e2e` 与
+`diagnose` 冒烟各 0 failure；两个窗体逐屏截图核对（中英文标题、换行、圆形按钮渲染）。
+
+---
+
 ## 2.1.4 — 2026-11-25
 
 ### 修复 / Fixed

@@ -69,6 +69,9 @@
     <ClCompile Include="src\ui\about_window.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\ui\help_window.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\ui\window_layout.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -159,6 +162,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\about_window.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\help_window.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\window_layout.h">

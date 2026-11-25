@@ -1,5 +1,6 @@
 #include "settings_window.h"
 #include "language.h"
+#include "help_window.h"
 #include "window_layout.h"
 #include "../../resource.h"
 #include "../core/config.h"
@@ -646,6 +647,7 @@ static void apply_language(HWND hDlg)
 	SetDlgItemTextW(hDlg, IDC_FILTER_HINT, lang_str(STR_FILTER_HINT));
 
 	SetDlgItemTextW(hDlg, IDC_DIAGHINT, lang_str(STR_DIAG_HINT));
+	SetDlgItemTextW(hDlg, IDC_VERSION_NOTES, lang_str(STR_VERSION_NOTES));
 	SetDlgItemTextW(hDlg, IDC_REFRESH, lang_str(STR_REFRESH));
 	SetDlgItemTextW(hDlg, IDC_CLEAR, lang_str(STR_CLEAR));
 	SetDlgItemTextW(hDlg, IDC_OPEN_LOG, lang_str(STR_LOG_DIR_BUTTON));
@@ -661,6 +663,46 @@ static void apply_language(HWND hDlg)
 
 	// The idle hint lives inside the test area, so it is painted, not set
 	InvalidateRect(GetDlgItem(hDlg, IDC_RIPPLE), NULL, TRUE);
+}
+
+// The little round "!" at the corner of the log group.
+//
+// Owner drawn because a push button cannot be round, and because fifteen verdict
+// values cannot be explained next to a column header. The colour is the system
+// highlight colour so it reads as a link, not as an alarm.
+static void draw_help_button(const DRAWITEMSTRUCT *item)
+{
+	HDC dc = item->hDC;
+	RECT box = item->rcItem;
+
+	FillRect(dc, &box, GetSysColorBrush(COLOR_BTNFACE));
+
+	if (item->itemState & ODS_SELECTED)
+		InflateRect(&box, -1, -1);
+
+	COLORREF accent = GetSysColor(COLOR_HOTLIGHT);
+
+	HPEN pen = CreatePen(PS_SOLID, 1, accent);
+	HGDIOBJ old_pen = SelectObject(dc, pen);
+	HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+
+	Ellipse(dc, box.left, box.top, box.right, box.bottom);
+
+	SelectObject(dc, old_brush);
+	SelectObject(dc, old_pen);
+	DeleteObject(pen);
+
+	SetBkMode(dc, TRANSPARENT);
+	SetTextColor(dc, accent);
+
+	HFONT font = (HFONT)SendMessageW(item->hwndItem, WM_GETFONT, 0, 0);
+	HGDIOBJ old_font = font ? SelectObject(dc, font) : NULL;
+
+	RECT text_box = box;
+	DrawTextW(dc, L"!", -1, &text_box, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+	if (old_font)
+		SelectObject(dc, old_font);
 }
 
 // Open the history folder in Explorer
@@ -885,9 +927,15 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 	{
 		const DRAWITEMSTRUCT *item = (const DRAWITEMSTRUCT *)lParam;
 
-		if (window && item && item->CtlID == IDC_RIPPLE)
+		if (item && item->CtlID == IDC_RIPPLE && window)
 		{
 			ripple_view_draw(&window->ripple, item, GetTickCount64(), lang_str(STR_TEST_HINT));
+			return TRUE;
+		}
+
+		if (item && item->CtlID == IDC_LOG_HELP)
+		{
+			draw_help_button(item);
 			return TRUE;
 		}
 
@@ -904,6 +952,16 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 			// and it does not throw the session away
 			if (window)
 				hide_to_tray(hDlg, window);
+			return TRUE;
+
+		case IDC_VERSION_NOTES:
+			help_window_show(hDlg, (HINSTANCE)GetWindowLongPtrW(hDlg, GWLP_HINSTANCE),
+							 HELP_TOPIC_VERSIONS);
+			return TRUE;
+
+		case IDC_LOG_HELP:
+			help_window_show(hDlg, (HINSTANCE)GetWindowLongPtrW(hDlg, GWLP_HINSTANCE),
+							 HELP_TOPIC_VERDICTS);
 			return TRUE;
 
 		case IDC_REFRESH:

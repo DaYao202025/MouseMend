@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.1.4-blue.svg)
+![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-informational.svg)
 ![Toolset](https://img.shields.io/badge/toolset-MSVC%20v145-purple.svg)
@@ -91,6 +91,10 @@ presses match the *intended* presses.
 * **Export diagnostics on demand** — the same bundle from the tray menu while the
   program is still healthy. Asking a user for evidence should never require
   reproducing the fault first.
+* **The window explains itself** — a round "!" beside the log header opens a
+  glossary of every verdict the engine can print, and a "Versions" button lists
+  what each published release fixed. Both were written because the column showed
+  words like "Simulated" and "Pass + release" and nothing said what they meant.
 
 ### How the decision is made
 
@@ -268,6 +272,10 @@ MouseMend 常驻托盘，在软件层过滤鼠标事件流 —— 让磨损的�
   有点晚，报告里也看不出任何问题。现在会计数、写进诊断报告，并每次运行提示一次。
 * **随时手动导出诊断包** —— 程序还正常的时候也能从托盘菜单导出同一份报告。
   找用户要证据，不该以"先复现一次"为前提。
+* **窗口会解释自己** —— 测试日志右上角有一个圆形「!」，点开是判定列每个取值的说明
+  （通过、通过+补发、程序模拟、四种拦截……）；「版本说明」列出每个公开版本修了什么。
+  做这两个入口，是因为窗口里出现过"程序模拟""通过+补发"这样的词，却没有任何地方
+  说明它们是什么意思。
 
 ### 判定是怎么做的
 
@@ -580,7 +588,7 @@ Released under the MIT licence — see [LICENSE](LICENSE).<br>
 
 <div align="center">
 
-**MouseMend 2.1.4** — MIT licensed, built with plain C and the Win32 API.<br>
-**MouseMend 2.1.4** —— MIT 许可证，纯 C 与 Win32 API 实现。
+**MouseMend 2.2.0** — MIT licensed, built with plain C and the Win32 API.<br>
+**MouseMend 2.2.0** —— MIT 许可证，纯 C 与 Win32 API 实现。
 
 </div>

@@ -37,6 +37,7 @@
 #include "src/ui/language.h"
 #include "src/ui/settings_window.h"
 #include "src/ui/about_window.h"
+#include "src/ui/help_window.h"
 #include "src/utils/autostart.h"
 #include "src/utils/hang_watchdog.h"
 #include "src/utils/crash_dump.h"
@@ -1690,6 +1691,7 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 		// requested from the tray icon while it is up would otherwise leave the
 		// process waiting for a click nobody is going to make.
 		about_window_close();
+		help_window_close();
 		DestroyWindow(hWnd);
 		break;
 

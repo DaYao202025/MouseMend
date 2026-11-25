@@ -153,6 +153,76 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_CRASH_REPORT_FOUND_FMT] = L"The program closed unexpectedly last time.\nA report was saved to:\n%s\n\nPlease send it to the author.",
 	[STR_HANG_REPORT_FOUND_FMT] = L"The program stopped responding last time and had to be signed out.\nA report was saved to:\n%s\n\nPlease send it to the author.",
 	[STR_INJECTION_FAILED] = L"One release could not be delivered to the focused window: it most likely runs as administrator. The mouse itself is fine.",
+
+	[STR_VERDICT_HELP_NAME] = L"Verdicts",
+	[STR_VERDICT_HELP_TITLE] = L"The verdict column is the engine's conclusion about each mouse event.",
+	[STR_VERDICT_HELP_TEXT] =
+		L"Every value it can show:\n"
+		L"\n"
+		L"Pass\n"
+		L"  A normal click, handed to the system untouched.\n"
+		L"\n"
+		L"Pass + release\n"
+		L"  A release was being held back in front of it. That release goes out\n"
+		L"  first, then the click passes as usual. To you it is one normal click.\n"
+		L"\n"
+		L"Simulated\n"
+		L"  The event came from another program - a macro, a remote desktop\n"
+		L"  session, an input method - not from your mouse. It is passed straight\n"
+		L"  through on purpose: filtering injected input would fight those tools.\n"
+		L"\n"
+		L"Release held\n"
+		L"  The end of a drag. The release is held back for a few tens of\n"
+		L"  milliseconds so switch bounce cannot interrupt the drag, then it is\n"
+		L"  delivered automatically.\n"
+		L"\n"
+		L"Blocked: too fast\n"
+		L"  Too close to the previous event. Treated as the second half of a\n"
+		L"  bounce and dropped.\n"
+		L"\n"
+		L"Blocked: drag\n"
+		L"  A release was still being held back, so this press was taken for\n"
+		L"  bounce.\n"
+		L"\n"
+		L"Blocked: release\n"
+		L"  This release belonged to a click that was already blocked.\n"
+		L"\n"
+		L"Blocked: reverse\n"
+		L"  The wheel reversed within the threshold. Taken for a bounce, ignored.\n"
+		L"\n"
+		L"Not protected\n"
+		L"  This button is not monitored. The event passed through untouched.\n"
+		L"\n"
+		L"No scroll\n"
+		L"  The wheel reported a zero delta, which means nothing. Ignored.",
+
+	[STR_VERSION_NOTES] = L"Versions",
+	[STR_VERSION_NOTES_TITLE] = L"What each release fixed.",
+	[STR_VERSION_NOTES_TEXT] =
+		L"Only published versions are listed.\n"
+		L"\n"
+		L"2.0.0  First public build: double clicks, wheel reversal, drags that\n"
+		L"       broke in the middle.\n"
+		L"\n"
+		L"2.1.2  Fixed a crash: the evidence line read a duration as a string\n"
+		L"       pointer, so any blocked click could close the program.\n"
+		L"       The minidump now loads dbghelp from System32 by full path -\n"
+		L"       another program had been putting its own copy in the way.\n"
+		L"       The window no longer opens off the screen.\n"
+		L"       Added the crash report bundle.\n"
+		L"\n"
+		L"2.1.3  Fixed a freeze: input is no longer injected from inside the\n"
+		L"       mouse hook callback. It used to stall all mouse input for a few\n"
+		L"       seconds, then leave only this program dead to the world and\n"
+		L"       impossible to end without signing out.\n"
+		L"       Added the hang report: ten seconds of silence and the program\n"
+		L"       writes down where it stopped.\n"
+		L"\n"
+		L"2.1.4  A release that cannot be delivered is no longer silent.\n"
+		L"\n"
+		L"2.1.0 and 2.1.1 were internal steps and were never published.",
+
+	[STR_HELP_CLOSE] = L"Close",
 };
 
 // Simplified Chinese strings
@@ -300,6 +370,66 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_CRASH_REPORT_FOUND_FMT] = L"上次程序异常退出了。\n诊断包已保存到：\n%s\n\n请把它发给作者。",
 	[STR_HANG_REPORT_FOUND_FMT] = L"上次程序卡住了（窗口不再响应），只能注销才能结束。\n诊断包已保存到：\n%s\n\n请把它发给作者。",
 	[STR_INJECTION_FAILED] = L"有一次松手没能送进当前窗口，那个窗口大概是以管理员身份运行的。鼠标本身没有问题。",
+
+	[STR_VERDICT_HELP_NAME] = L"判定说明",
+	[STR_VERDICT_HELP_TITLE] = L"判定列是引擎对每一次鼠标事件的结论。全部可能的取值如下。",
+	[STR_VERDICT_HELP_TEXT] =
+		L"通过\n"
+		L"  一次正常点击，原样交给系统，没有任何干预。\n"
+		L"\n"
+		L"通过+补发\n"
+		L"  它前面有一次被压住的松手。先把那次松手补发出去，这次点击照常通过，\n"
+		L"  对你来说就是一次正常点击。\n"
+		L"\n"
+		L"程序模拟\n"
+		L"  这次事件不是你的鼠标发出的，是别的程序（宏、远程桌面、输入法）注入的。\n"
+		L"  这里刻意直接放行 —— 去过滤注入事件会和那些工具互相干扰。\n"
+		L"\n"
+		L"推迟松手\n"
+		L"  一次拖拽的结束。为了不让触点弹跳打断拖拽，松手被压住几十毫秒，\n"
+		L"  之后会自动补发。\n"
+		L"\n"
+		L"拦截：太快\n"
+		L"  和上一次事件间隔太短，当作触点弹跳的后半截丢弃。\n"
+		L"\n"
+		L"拦截：拖拽\n"
+		L"  上一次松手还压着没发出去，这次按下被判为弹跳。\n"
+		L"\n"
+		L"拦截：松手\n"
+		L"  这次松开属于一个已经被拦下的点击。\n"
+		L"\n"
+		L"拦截：回跳\n"
+		L"  滚轮在阈值内反向，判定为回跳，忽略。\n"
+		L"\n"
+		L"此键未防护\n"
+		L"  这个按键没有开启防护，事件原样通过。\n"
+		L"\n"
+		L"滚轮无位移\n"
+		L"  滚轮上报的位移是 0，没有意义，忽略。",
+
+	[STR_VERSION_NOTES] = L"版本说明",
+	[STR_VERSION_NOTES_TITLE] = L"每个版本修了什么。",
+	[STR_VERSION_NOTES_TEXT] =
+		L"只列公开发布过的版本。\n"
+		L"\n"
+		L"2.0.0  第一个公开版本：修双击、滚轮回跳、拖拽断触。\n"
+		L"\n"
+		L"2.1.2  修复闪退：拦截证据那行把毫秒数当成字符串指针去读，任何一次\n"
+		L"       被拦下的点击都可能让程序直接退出。\n"
+		L"       崩溃转储改为从 System32 按全路径加载 dbghelp —— 之前会被\n"
+		L"       别的软件放进来的副本顶替。\n"
+		L"       窗口不再跑到屏幕外。\n"
+		L"       新增崩溃报告包。\n"
+		L"\n"
+		L"2.1.3  修复卡死：注入不再在鼠标钩子回调里发送。之前会先把全系统鼠标\n"
+		L"       卡住几秒，然后只有本程序点不动，进程还结束不掉，只能注销。\n"
+		L"       新增卡死报告：安静 10 秒就把停在哪写下来。\n"
+		L"\n"
+		L"2.1.4  送不出去的松手不再静默。\n"
+		L"\n"
+		L"2.1.0 与 2.1.1 是内部版本，没有发布。",
+
+	[STR_HELP_CLOSE] = L"关闭",
 };
 
 // Button names, indexed by MouseButton

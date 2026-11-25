@@ -162,6 +162,7 @@
     <ClCompile Include="src\core\notify_policy.c" />
     <ClCompile Include="src\core\settings.c" />
     <ClCompile Include="src\ui\about_window.c" />
+  <ClCompile Include="src\ui\help_window.c" />
     <ClCompile Include="src\ui\context_menu.c" />
     <ClCompile Include="src\ui\input_box.c" />
     <ClCompile Include="src\ui\language.c" />
@@ -194,6 +195,7 @@
     <ClInclude Include="src\core\notify_policy.h" />
     <ClInclude Include="src\core\settings.h" />
     <ClInclude Include="src\ui\about_window.h" />
+  <ClInclude Include="src\ui\help_window.h" />
     <ClInclude Include="src\ui\context_menu.h" />
     <ClInclude Include="src\ui\input_box.h" />
     <ClInclude Include="src\ui\language.h" />

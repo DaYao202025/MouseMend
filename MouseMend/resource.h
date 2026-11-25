@@ -8,6 +8,7 @@
 // Check-up window
 #define IDD_SETTINGS                    103
 #define IDD_ABOUT                       104
+#define IDD_HELP                        105
 #define IDC_STATS                       1001
 #define IDC_DIAG                        1003
 #define IDC_REFRESH                     1004
@@ -41,6 +42,13 @@
 #define IDC_ABOUT_CLOSE                 1036
 #define IDC_ABOUT_LIMITS                1037
 #define IDC_ABOUT_ORIGIN                1038
+
+// Help windows
+#define IDC_VERSION_NOTES               1039
+#define IDC_LOG_HELP                    1040
+#define IDC_HELP_TITLE                  1041
+#define IDC_HELP_TEXT                   1042
+#define IDC_HELP_CLOSE                  1043
 
 // Next default values for new objects
 // 

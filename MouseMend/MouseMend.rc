@@ -102,11 +102,13 @@ BEGIN
     LTEXT           "", IDC_FILTER_HINT, 14, 40, 224, 9, SS_LEFT | SS_ENDELLIPSIS
     CONTROL         "", IDC_RIPPLE, "Static", SS_OWNERDRAW, 13, 51, 225, 236
     GROUPBOX        "", IDC_GROUP_STATS, 248, 21, 222, 68
+    PUSHBUTTON      "", IDC_VERSION_NOTES, 420, 16, 48, 12
     LTEXT           "", IDC_STATS, 254, 29, 210, 9, SS_LEFT | SS_ENDELLIPSIS
     LTEXT           "", IDC_BLOCKLOG_HDR, 255, 39, 208, 9
     EDITTEXT        IDC_BLOCKLOG, 254, 49, 210, 34, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
     GROUPBOX        "", IDC_GROUP_LOG, 248, 94, 222, 117
-    LTEXT           "", IDC_TESTLOG_HDR, 255, 102, 208, 9
+    CONTROL         "", IDC_LOG_HELP, "Button", BS_OWNERDRAW | WS_TABSTOP, 454, 99, 12, 12
+    LTEXT           "", IDC_TESTLOG_HDR, 255, 102, 194, 9
     EDITTEXT        IDC_TESTLOG, 254, 112, 210, 93, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
     GROUPBOX        "", IDC_GROUP_DIAG, 248, 216, 222, 55
     LTEXT           "", IDC_DIAGHINT, 254, 224, 208, 9
@@ -139,6 +141,25 @@ BEGIN
     LTEXT           "", IDC_ABOUT_ORIGIN, 14, 255, 272, 9, SS_LEFT | SS_ENDELLIPSIS
     PUSHBUTTON      "", IDC_ABOUT_WEBSITE, 14, 269, 96, 16
     DEFPUSHBUTTON   "", IDC_ABOUT_CLOSE, 240, 269, 46, 16
+END
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Help window
+//
+// One template serves both help topics: the verdict glossary and the version
+// notes. The body lives in a read-only edit so a long text scrolls instead of
+// being cut off, and so it stays selectable.
+//
+
+IDD_HELP DIALOGEX 0, 0, 340, 250
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION ""
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_HELP_TITLE, 10, 8, 320, 9, SS_LEFT
+    EDITTEXT        IDC_HELP_TEXT, 10, 20, 320, 210, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON   "", IDC_HELP_CLOSE, 284, 234, 46, 14
 END
 
 #endif    // Neutral (Default) resources
