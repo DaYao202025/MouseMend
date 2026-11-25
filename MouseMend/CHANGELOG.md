@@ -20,10 +20,12 @@
 
 ### 说明 / Notes
 
-- 已装过的机器上保存的仍是旧值（`ReleaseDelay=50`），设置不会被静默改写：
-  到 托盘 → 高级 → 释放延迟 选 20（或点 恢复默认）即可。
-  Previously saved settings are left alone: pick 20 in the tray menu, or restore
-  defaults.
+- **旧的 50 ms 会被一次性迁到 20 ms。** 2.2.2 之前每次保存都会把 `ReleaseDelay`
+  写进注册表，所以存着 50 的机器基本都是"旧默认值"，不是用户的主动选择；而它正是
+  拖完窗口还要多跟 50 ms 的原因。启动时读到 50 就按新默认处理，40 / 80 保持不动
+  （那两个只能是用户自己选的）。改在菜单里改，随时可以再改回去。
+  A stored 50 ms is migrated to 20 ms once: the old build wrote the default on
+  every save, so 50 says nothing about intent. 40 and 80 are left alone.
 
 ### 验证 / Verified
 
