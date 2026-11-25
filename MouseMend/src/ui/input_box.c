@@ -169,13 +169,16 @@ bool input_box_show(HINSTANCE hInstance, LPCWSTR title, LPCWSTR prompt,
 								 WS_CHILD | WS_VISIBLE | ES_NUMBER | ES_AUTOHSCROLL,
 								 20, 48, 290, 26, hWnd, (HMENU)IDC_INPUT_EDIT, hInstance, NULL);
 
+	// The buttons end where the field and the prompt end. They used to stop at
+	// 320 while everything above stopped at 310, which left the pair floating ten
+	// pixels past the edge it belongs to.
 	HWND hOK = CreateWindowExW(0, L"BUTTON", lang_str(STR_OK),
 							   WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-							   150, 90, 80, 30, hWnd, (HMENU)IDOK, hInstance, NULL);
+							   140, 90, 80, 30, hWnd, (HMENU)IDOK, hInstance, NULL);
 
 	HWND hCancel = CreateWindowExW(0, L"BUTTON", lang_str(STR_CANCEL),
 								   WS_CHILD | WS_VISIBLE,
-								   240, 90, 80, 30, hWnd, (HMENU)IDCANCEL, hInstance, NULL);
+								   230, 90, 80, 30, hWnd, (HMENU)IDCANCEL, hInstance, NULL);
 
 	// Use the system message font instead of the ancient bitmap font
 	HFONT hFont = NULL;

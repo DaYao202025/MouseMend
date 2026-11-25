@@ -52,10 +52,14 @@ WatchdogVerdict hook_watchdog_check(WatchdogState *state, bool cursor_moved, boo
 	if (state->suspect_streak < WATCHDOG_SUSPECT_LIMIT)
 		return WATCHDOG_SUSPECT;
 
-	// Do not thrash: a recovery attempt itself needs time to prove itself
+	// Do not thrash: a recovery attempt itself needs time to prove itself.
+	// The streak is dropped while waiting, otherwise the cooldown would end with
+	// a streak that already passed the limit and the next check would reinstall
+	// immediately - which is exactly the thrash the cooldown exists to prevent.
 	if (state->last_recover_tick != 0 && now >= state->last_recover_tick &&
 		now - state->last_recover_tick < recover_cooldown_ms)
 	{
+		state->suspect_streak = 0;
 		return WATCHDOG_SUSPECT;
 	}
 

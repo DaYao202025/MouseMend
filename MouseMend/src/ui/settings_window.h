@@ -90,6 +90,16 @@ typedef struct
 
 	RippleView ripple;
 
+	// Panes waiting for a rewrite, and when the last one happened. A burst of
+	// clicks is shown in one go instead of one rewrite per frame.
+	unsigned pending_panes;
+	uint64_t panes_painted_ms;
+
+	// Whether the animation timer is currently running at the fast rate, and
+	// when the last frame was drawn
+	bool anim_fast;
+	uint64_t last_anim_ms;
+
 	// Hover tips of the filter controls. One tooltip window serves all four, so a
 	// new user can learn what "Auto" does without clicking anything.
 	HWND tooltip;

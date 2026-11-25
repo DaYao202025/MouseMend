@@ -60,8 +60,14 @@ void test_hook_watchdog(void)
 	CHECK(hook_watchdog_check(&state, true, false, 5, 19000, cooldown) == WATCHDOG_SUSPECT);
 	CHECK(state.recover_count == 1);
 
-	// Once the cooldown elapsed, recovery is allowed again
-	CHECK(hook_watchdog_check(&state, true, false, 5, 44000, cooldown) == WATCHDOG_RECOVER);
+	// Once the cooldown elapsed the evidence has to be collected again: the streak
+	// is dropped while waiting, so one sample cannot reinstall on its own. Without
+	// that, the cooldown ended with a streak already past the limit and the very
+	// next check reinstalled - a reinstall every cooldown, forever.
+	CHECK(hook_watchdog_check(&state, true, false, 5, 44000, cooldown) == WATCHDOG_SUSPECT);
+	CHECK(state.recover_count == 1);
+
+	CHECK(hook_watchdog_check(&state, true, false, 5, 47000, cooldown) == WATCHDOG_RECOVER);
 	CHECK(state.recover_count == 2);
 
 	// Events arriving again prove the recovery worked
@@ -467,6 +473,69 @@ void test_block_log_files(void)
 	CHECK(!block_log_write(NULL, &base, &entry));
 	CHECK(!block_log_write(directory, NULL, &entry));
 	CHECK(!block_log_write(directory, &base, NULL));
+
+	// A batch is written with one open, and the header still appears exactly once
+	CHECK(DeleteFileW(file_path));
+	CHECK(DeleteFileW(next_day_path));
+	CHECK(RemoveDirectoryW(directory));
+
+	BlockLogEntry batch[3];
+	memset(batch, 0, sizeof(batch));
+
+	for (int i = 0; i < 3; i++)
+	{
+		batch[i].elapsed_ms = 1000 + (uint64_t)i * 1000;
+		batch[i].button = MOUSE_BUTTON_LEFT;
+		batch[i].is_down = (i % 2) == 0;
+		batch[i].threshold_ms = 50;
+	}
+
+	CHECK(block_log_write_many(directory, &base, batch, 3) == 3);
+
+	file = CreateFileW(file_path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+					   NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	CHECK(file != INVALID_HANDLE_VALUE);
+
+	if (file != INVALID_HANDLE_VALUE)
+	{
+		char content[1024] = {0};
+		DWORD read = 0;
+		if (!ReadFile(file, content, sizeof(content) - 1, &read, NULL))
+			content[0] = '\0';
+		CloseHandle(file);
+
+		int headers = 0;
+
+		for (const char *cursor = content; (cursor = strstr(cursor, "# time")) != NULL; cursor++)
+			headers++;
+
+		// One header for the whole batch, not one per entry
+		CHECK(headers == 1);
+
+		CHECK(strstr(content, "10:00:01.000") != NULL);
+		CHECK(strstr(content, "10:00:02.000") != NULL);
+		CHECK(strstr(content, "10:00:03.000") != NULL);
+
+		// Press and release alternate, so the batch is not collapsed into one row
+		CHECK(strstr(content, "pressed") != NULL);
+		CHECK(strstr(content, "released") != NULL);
+	}
+
+	// A batch that straddles midnight has to switch files part way through.
+	// The base is 10:00:00, so 13 h 59 m 59 s lands on 23:59:59 and one second
+	// later is the next day.
+	memset(batch, 0, sizeof(batch));
+	batch[0].elapsed_ms = (uint64_t)50399 * 1000; // 23:59:59, day one
+	batch[1].elapsed_ms = (uint64_t)50400 * 1000; // 00:00:00, day two
+	batch[2].elapsed_ms = (uint64_t)50401 * 1000;
+
+	CHECK(block_log_write_many(directory, &base, batch, 3) == 3);
+	CHECK(GetFileAttributesW(file_path) != INVALID_FILE_ATTRIBUTES);
+	CHECK(GetFileAttributesW(next_day_path) != INVALID_FILE_ATTRIBUTES);
+
+	// An empty batch is not a failure
+	CHECK(block_log_write_many(directory, &base, batch, 0) == 0);
+	CHECK(block_log_write_many(NULL, &base, batch, 3) == 0);
 
 	// Clean up
 	DeleteFileW(file_path);

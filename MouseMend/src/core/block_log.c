@@ -299,52 +299,94 @@ bool block_log_describe_directory(wchar_t *buffer, size_t buffer_count)
 	return SUCCEEDED(StringCchPrintfW(buffer, buffer_count, L"%s\\MouseMend\\%s", local_app_data, BLOCK_LOG_DIR_NAME));
 }
 
+// Append entries to today's file, one open for the whole batch
+size_t block_log_write_many(const wchar_t *directory, const SYSTEMTIME *base,
+							const BlockLogEntry *entries, size_t count)
+{
+	if (!directory || !directory[0] || !base || !entries || count == 0)
+		return 0;
+
+	// Recreate the directory once per batch: the user is allowed to delete the
+	// folder at any time and the option must keep working afterwards.
+	if (!ensure_directory(directory))
+		return 0;
+
+	FILE *file = NULL;
+	wchar_t open_day[16] = {0};
+	size_t written = 0;
+
+	for (size_t i = 0; i < count; i++)
+	{
+		wchar_t day[16];
+
+		if (!block_log_format_day(entries[i].elapsed_ms, base, day, ARRAYSIZE(day)))
+			continue;
+
+		// A batch that straddles midnight writes to two files, so the day is
+		// compared per entry rather than assumed constant
+		if (!file || wcscmp(open_day, day) != 0)
+		{
+			if (file)
+				fclose(file);
+
+			file = NULL;
+
+			wchar_t path[MAX_PATH];
+
+			if (FAILED(StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\%s.log", directory, day)))
+				continue;
+
+			// A header makes the file readable for a non-technical user without
+			// breaking the stable column layout that scripts and Excel rely on
+			bool new_file = (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES);
+
+			if (_wfopen_s(&file, path, L"ab") != 0)
+			{
+				file = NULL;
+				continue;
+			}
+
+			if (new_file)
+			{
+				static const char HEADER[] = "# time\tbutton\tevent\tthreshold\r\n";
+				fwrite(HEADER, 1, sizeof(HEADER) - 1, file);
+			}
+
+			StringCchCopyW(open_day, ARRAYSIZE(open_day), day);
+		}
+
+		wchar_t line[256];
+
+		if (!block_log_format_line(&entries[i], base, line, ARRAYSIZE(line)))
+			continue;
+
+		// The content is pure ASCII, so a straight UTF-8 conversion keeps the
+		// file readable in Notepad and greppable from a script.
+		char utf8[512];
+		int bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8) - 1, NULL, NULL);
+
+		if (bytes <= 1)
+			continue;
+
+		if (fwrite(utf8, 1, (size_t)(bytes - 1), file) != (size_t)(bytes - 1))
+			continue;
+
+		written++;
+	}
+
+	if (file && fclose(file) != 0)
+	{
+		// stdio holds the last block in a buffer until close, so a full disk shows
+		// up here and not at fwrite. Claiming success would make the counter in
+		// the interface disagree with the file the user opens.
+		return 0;
+	}
+
+	return written;
+}
+
 // Append one entry to today's file
 bool block_log_write(const wchar_t *directory, const SYSTEMTIME *base, const BlockLogEntry *entry)
 {
-	if (!directory || !directory[0] || !base || !entry)
-		return false;
-
-	wchar_t day[16];
-	if (!block_log_format_day(entry->elapsed_ms, base, day, ARRAYSIZE(day)))
-		return false;
-
-	wchar_t path[MAX_PATH];
-	if (FAILED(StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\%s.log", directory, day)))
-		return false;
-
-	// Recreate the directory on every write: the user is allowed to delete the
-	// folder at any time and the option must keep working afterwards.
-	if (!ensure_directory(directory))
-		return false;
-
-	wchar_t line[256];
-	if (!block_log_format_line(entry, base, line, ARRAYSIZE(line)))
-		return false;
-
-	// A header makes the file readable for a non-technical user without breaking
-	// the stable column layout that scripts and Excel rely on
-	bool new_file = (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES);
-
-	FILE *file = _wfopen(path, L"ab");
-	if (!file)
-		return false;
-
-	if (new_file)
-	{
-		static const char HEADER[] = "# time\tbutton\tevent\tthreshold\r\n";
-		fwrite(HEADER, 1, sizeof(HEADER) - 1, file);
-	}
-
-	// The content is pure ASCII, so a straight UTF-8 conversion keeps the file
-	// readable in Notepad and greppable from a script.
-	char utf8[512];
-	int bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8) - 1, NULL, NULL);
-	bool written = false;
-
-	if (bytes > 1)
-		written = (fwrite(utf8, 1, (size_t)(bytes - 1), file) == (size_t)(bytes - 1));
-
-	fclose(file);
-	return written;
+	return block_log_write_many(directory, base, entry, 1) == 1;
 }

@@ -18,8 +18,35 @@
 
 // The log panes are drained on a fast timer so a press shows up immediately;
 // the same timer drives the expanding rings.
+//
+// 16 ms is one frame at 60 Hz. The rings are time based, so a late tick draws
+// the ring where it should be rather than where a frame counter thinks it is;
+// running at 30 Hz was what made the expansion look like it was stepping.
 #define SETTINGS_TIMER_ANIM 2
-#define SETTINGS_ANIM_MS 33
+#define SETTINGS_ANIM_MS 16
+
+// Idle rate of the same timer, used when nothing is moving.
+//
+// The window shares its thread with the mouse hook, and a low level hook is
+// dropped by the system when its callback overruns. Sixty two wake-ups a second
+// for a frame nobody is looking at costs battery and puts that many chances of
+// a late hook delivery into every second the window is open.
+#define SETTINGS_ANIM_IDLE_MS 50
+
+// How long the fast rate is kept after the last frame, so the ring that follows
+// a pause still starts on the frame the click happened on
+#define SETTINGS_ANIM_GRACE_MS 1500
+
+// Minimum time between two pane rewrites. A pane is a plain EDIT control and
+// rewriting one pushes its whole content through the message system, which is
+// the most expensive thing the animation tick does. A burst of clicks used to
+// rewrite it on every frame and starve the rings; five updates a second is
+// indistinguishable in a log only a human reads.
+#define SETTINGS_PANE_MS 100
+
+// Posted to itself once the window is on screen, so the self check runs after the
+// first paint instead of in front of it
+#define SETTINGS_MSG_BUILD_REPORT (WM_APP + 3)
 
 #define SETTINGS_DIAG_SIZE 4096
 #define SETTINGS_EVIDENCE_SIZE 1536
@@ -198,7 +225,7 @@ static unsigned drain_trace(HWND hDlg, SettingsWindow *window)
 
 	// Bounded drain: a backlog (or a button that bounces faster than the timer)
 	// would otherwise rebuild the pane once per entry in a single tick and
-	// freeze the window. Whatever is left waits for the next tick, 33 ms away.
+	// freeze the window. Whatever is left waits for the next tick.
 	int budget = SETTINGS_TRACE_DRAIN_PER_TICK;
 
 	while (budget-- > 0 && event_trace_pop(window->trace, &entry))
@@ -308,10 +335,12 @@ static void show_log(HWND hDlg, int control_id, const wchar_t *text)
 	if (!edit)
 		return;
 
+	// Nothing else on purpose: SetWindowTextW already leaves the caret and the
+	// scroll position at the top, which is where the newest row is. Forcing them
+	// with EM_SETSEL/EM_SCROLLCARET used to run ten times a second and threw away
+	// whatever the user had selected - the pane is read only precisely so a row
+	// can be copied out of it, and that copy could never be finished.
 	SetWindowTextW(edit, text);
-
-	SendMessageW(edit, EM_SETSEL, 0, 0);
-	SendMessageW(edit, EM_SCROLLCARET, 0, 0);
 }
 
 // Render one pane and put it on screen
@@ -648,6 +677,7 @@ static void apply_language(HWND hDlg)
 
 	SetDlgItemTextW(hDlg, IDC_DIAGHINT, lang_str(STR_DIAG_HINT));
 	SetDlgItemTextW(hDlg, IDC_VERSION_NOTES, lang_str(STR_VERSION_NOTES));
+	SetDlgItemTextW(hDlg, IDC_LOG_HELP, lang_str(STR_VERDICT_HELP_NAME));
 	SetDlgItemTextW(hDlg, IDC_REFRESH, lang_str(STR_REFRESH));
 	SetDlgItemTextW(hDlg, IDC_CLEAR, lang_str(STR_CLEAR));
 	SetDlgItemTextW(hDlg, IDC_OPEN_LOG, lang_str(STR_LOG_DIR_BUTTON));
@@ -663,46 +693,6 @@ static void apply_language(HWND hDlg)
 
 	// The idle hint lives inside the test area, so it is painted, not set
 	InvalidateRect(GetDlgItem(hDlg, IDC_RIPPLE), NULL, TRUE);
-}
-
-// The little round "!" at the corner of the log group.
-//
-// Owner drawn because a push button cannot be round, and because fifteen verdict
-// values cannot be explained next to a column header. The colour is the system
-// highlight colour so it reads as a link, not as an alarm.
-static void draw_help_button(const DRAWITEMSTRUCT *item)
-{
-	HDC dc = item->hDC;
-	RECT box = item->rcItem;
-
-	FillRect(dc, &box, GetSysColorBrush(COLOR_BTNFACE));
-
-	if (item->itemState & ODS_SELECTED)
-		InflateRect(&box, -1, -1);
-
-	COLORREF accent = GetSysColor(COLOR_HOTLIGHT);
-
-	HPEN pen = CreatePen(PS_SOLID, 1, accent);
-	HGDIOBJ old_pen = SelectObject(dc, pen);
-	HGDIOBJ old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-
-	Ellipse(dc, box.left, box.top, box.right, box.bottom);
-
-	SelectObject(dc, old_brush);
-	SelectObject(dc, old_pen);
-	DeleteObject(pen);
-
-	SetBkMode(dc, TRANSPARENT);
-	SetTextColor(dc, accent);
-
-	HFONT font = (HFONT)SendMessageW(item->hwndItem, WM_GETFONT, 0, 0);
-	HGDIOBJ old_font = font ? SelectObject(dc, font) : NULL;
-
-	RECT text_box = box;
-	DrawTextW(dc, L"!", -1, &text_box, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-	if (old_font)
-		SelectObject(dc, old_font);
 }
 
 // Open the history folder in Explorer
@@ -724,6 +714,20 @@ static void open_log_folder(HWND hDlg, SettingsWindow *window)
 	ShellExecuteW(hDlg, L"open", snapshot.log_directory, NULL, NULL, SW_SHOWNORMAL);
 }
 
+// Run the animation timer at the rate the window currently needs
+//
+// Only two rates exist: full while something moves, and one that merely keeps
+// the trace draining while nothing does. Switching is done here so the timer is
+// never reset twice for the same state.
+static void set_anim_rate(HWND hDlg, SettingsWindow *window, bool fast)
+{
+	if (!window || window->anim_fast == fast)
+		return;
+
+	window->anim_fast = fast;
+	SetTimer(hDlg, SETTINGS_TIMER_ANIM, fast ? SETTINGS_ANIM_MS : SETTINGS_ANIM_IDLE_MS, NULL);
+}
+
 // Stop the live work of a window that is about to leave the screen
 //
 // A hidden window keeps its timers: the animation tick would keep draining the
@@ -734,6 +738,9 @@ static void suspend_live(HWND hDlg, SettingsWindow *window)
 {
 	KillTimer(hDlg, SETTINGS_TIMER_REFRESH);
 	KillTimer(hDlg, SETTINGS_TIMER_ANIM);
+
+	if (window)
+		window->anim_fast = false;
 
 	if (window && window->trace)
 		event_trace_set_capture(window->trace, NULL);
@@ -757,7 +764,11 @@ static void resume_live(HWND hDlg, SettingsWindow *window)
 	update_capture_rect(hDlg, window);
 
 	SetTimer(hDlg, SETTINGS_TIMER_REFRESH, SETTINGS_REFRESH_MS, NULL);
-	SetTimer(hDlg, SETTINGS_TIMER_ANIM, SETTINGS_ANIM_MS, NULL);
+
+	// Coming back from the tray is a fresh start, so it begins at full rate and
+	// falls back to idle by itself
+	window->last_anim_ms = GetTickCount64();
+	set_anim_rate(hDlg, window, true);
 }
 
 // Put the window away into the tray
@@ -811,6 +822,10 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		window->near_miss_count = 0;
 		window->near_miss_min_ms = 0;
 		window->last_diag_tick = 0;
+		window->pending_panes = 0;
+		window->panes_painted_ms = 0;
+		window->anim_fast = false;
+		window->last_anim_ms = GetTickCount64();
 		ripple_view_reset(&window->ripple);
 
 		if (window->trace)
@@ -828,6 +843,12 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 			if (window->status_font)
 				SendDlgItemMessageW(hDlg, IDC_STATUS, WM_SETFONT, (WPARAM)window->status_font, TRUE);
 		}
+
+		// The test area draws its idle hint with the control font. An owner draw
+		// static does not inherit the dialog font by itself, and the stock one it
+		// gets instead is a different typeface from every label around it.
+		SendDlgItemMessageW(hDlg, IDC_RIPPLE, WM_SETFONT,
+							(WPARAM)SendMessageW(hDlg, WM_GETFONT, 0, 0), TRUE);
 
 		// The three panes use a fixed pitch font: every Latin character is exactly
 		// one cell wide and a CJK glyph exactly two, so padding the cells is all it
@@ -860,7 +881,13 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		create_filter_tooltips(hDlg, window);
 		update_filter_ui(hDlg, window, false);
 		clear_logs(hDlg, window);
-		refresh_diagnostics(hDlg, window, true);
+
+		// Not built here: the report installs a probe hook, reads the registry and
+		// writes a probe value, and all of that sits between the user and the first
+		// usable frame on a thread that also serves the mouse hook. The window is
+		// shown first, the report arrives a moment later.
+		PostMessageW(hDlg, SETTINGS_MSG_BUILD_REPORT, 0, 0);
+
 		refresh_live(hDlg, window);
 
 		// The window is a real taskbar window: it carries the application icon and
@@ -882,7 +909,7 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		update_capture_rect(hDlg, window);
 
 		SetTimer(hDlg, SETTINGS_TIMER_REFRESH, SETTINGS_REFRESH_MS, NULL);
-		SetTimer(hDlg, SETTINGS_TIMER_ANIM, SETTINGS_ANIM_MS, NULL);
+		set_anim_rate(hDlg, window, true);
 		return TRUE;
 	}
 
@@ -906,21 +933,47 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		if (wParam == SETTINGS_TIMER_ANIM)
 		{
 			unsigned changed = drain_trace(hDlg, window);
-			bool repaint = ripple_view_tick(&window->ripple, GetTickCount64());
+			uint64_t now = GetTickCount64();
+			bool repaint = ripple_view_tick(&window->ripple, now);
 
-			// Only the pane that actually gained a row is rewritten
-			if (changed & SETTINGS_LOG_CHANGED)
-				show_pane_text(hDlg, window, IDC_TESTLOG, &window->test_log);
+			// Coalesced: every click in the last 100 ms lands in the same rewrite
+			window->pending_panes |= changed;
 
-			if (changed & SETTINGS_BLOCK_CHANGED)
-				show_pane_text(hDlg, window, IDC_BLOCKLOG, &window->block_log);
+			if (window->pending_panes && now - window->panes_painted_ms >= SETTINGS_PANE_MS)
+			{
+				// Only the pane that actually gained a row is rewritten
+				if (window->pending_panes & SETTINGS_LOG_CHANGED)
+					show_pane_text(hDlg, window, IDC_TESTLOG, &window->test_log);
+
+				if (window->pending_panes & SETTINGS_BLOCK_CHANGED)
+					show_pane_text(hDlg, window, IDC_BLOCKLOG, &window->block_log);
+
+				window->pending_panes = 0;
+				window->panes_painted_ms = now;
+			}
 
 			if (changed || repaint)
 				InvalidateRect(GetDlgItem(hDlg, IDC_RIPPLE), NULL, FALSE);
 
+			// Full rate only while something is moving, plus a moment after the
+			// last frame so a click that follows a pause is still drawn at once.
+			bool busy = repaint || changed != 0;
+
+			if (busy)
+				window->last_anim_ms = now;
+
+			bool fast = busy || (now - window->last_anim_ms) < SETTINGS_ANIM_GRACE_MS;
+
+			set_anim_rate(hDlg, window, fast);
+
 			return TRUE;
 		}
 
+		return TRUE;
+
+	case SETTINGS_MSG_BUILD_REPORT:
+		// The window is up by now, so the probe costs nothing the user can see
+		refresh_diagnostics(hDlg, window, true);
 		return TRUE;
 
 	case WM_DRAWITEM:
@@ -930,12 +983,6 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		if (item && item->CtlID == IDC_RIPPLE && window)
 		{
 			ripple_view_draw(&window->ripple, item, GetTickCount64(), lang_str(STR_TEST_HINT));
-			return TRUE;
-		}
-
-		if (item && item->CtlID == IDC_LOG_HELP)
-		{
-			draw_help_button(item);
 			return TRUE;
 		}
 
@@ -1036,6 +1083,7 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 
 			window->hwnd = NULL;
 			ripple_view_reset(&window->ripple);
+			ripple_view_release();
 
 			// The tooltip is owned by the dialog, so it is already gone; dropping
 			// the stale handle keeps a later reopen from sending messages to it

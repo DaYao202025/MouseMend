@@ -22,7 +22,8 @@
 typedef struct
 {
 	HANDLE file;
-	wchar_t path[MAX_PATH]; // Kept so a failed archive can be deleted again
+	wchar_t path[MAX_PATH];		// Name the archive is published under
+	wchar_t part_path[MAX_PATH]; // Name it is written under until it is complete
 	uint64_t position;		// Bytes written so far
 	uint32_t entry_count;
 	uint32_t central_offset;

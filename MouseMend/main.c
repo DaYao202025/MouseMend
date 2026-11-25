@@ -1049,26 +1049,41 @@ static void FlushLogQueue(void)
 		}
 	}
 
-	// Bounded drain: each entry costs an open/write/close, and this runs on the
-	// same thread as the mouse hook. Whatever is left is picked up by the next
-	// state tick instead of blocking here for an unbounded time.
+	// Bounded drain: the batch keeps the file open across all of it, and this
+	// runs on the same thread as the mouse hook. Whatever is left is picked up by
+	// the next state tick instead of blocking here for an unbounded time.
+	BlockLogEntry batch[BLOCK_LOG_DRAIN_PER_TICK];
 	int budget = BLOCK_LOG_DRAIN_PER_TICK;
-	BlockLogEntry entry;
 
-	while (budget-- > 0 && block_log_pop(&g_app.log_queue, &entry))
+	while (budget > 0)
 	{
-		if (block_log_write(g_app.log_directory, &g_app.log_base_time, &entry))
+		int filled = 0;
+
+		while (filled < budget && block_log_pop(&g_app.log_queue, &batch[filled]))
+			filled++;
+
+		if (filled == 0)
+			break;
+
+		size_t done = block_log_write_many(g_app.log_directory, &g_app.log_base_time,
+										   batch, (size_t)filled);
+
+		g_app.log_written += (uint32_t)done;
+
+		if (done < (size_t)filled)
 		{
-			g_app.log_written++;
-			continue;
+			if (!g_app.log_warning_shown && g_app.tray_ready)
+			{
+				tray_icon_show_balloon(&g_app.tray_icon, lang_str(STR_APP_NAME),
+									   lang_str(STR_LOG_DIR_UNAVAILABLE), NIIF_WARNING);
+				g_app.log_warning_shown = true;
+			}
+
+			// The rest will fail the same way within this tick
+			break;
 		}
 
-		if (!g_app.log_warning_shown && g_app.tray_ready)
-		{
-			tray_icon_show_balloon(&g_app.tray_icon, lang_str(STR_APP_NAME),
-								   lang_str(STR_LOG_DIR_UNAVAILABLE), NIIF_WARNING);
-			g_app.log_warning_shown = true;
-		}
+		budget -= filled;
 	}
 
 	if (block_log_count(&g_app.log_queue) > 0)

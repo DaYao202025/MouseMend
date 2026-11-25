@@ -199,10 +199,32 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_VERSION_NOTES] = L"Versions",
 	[STR_VERSION_NOTES_TITLE] = L"What each release fixed.",
 	[STR_VERSION_NOTES_TEXT] =
-		L"Only published versions are listed.\n"
+		L"Only published versions are listed, newest first.\n"
 		L"\n"
-		L"2.0.0  First public build: double clicks, wheel reversal, drags that\n"
-		L"       broke in the middle.\n"
+		L"2.2.1  The click ring is smoother: it runs at 60 frames a second, grows\n"
+		L"       from thick to thin, and fades into the background rather than to\n"
+		L"       white. A single letter sits in the middle - L, M or R - so the\n"
+		L"       colour is no longer the only clue.\n"
+		L"       The log panes can be selected and copied again: a new click every\n"
+		L"       hundred milliseconds used to throw the selection away.\n"
+		L"       The diagnostics bundle no longer carries your Windows user name\n"
+		L"       or full file paths, and two exports in the same second no longer\n"
+		L"       replace each other.\n"
+		L"       The hint in the test area now uses the same font as the window.\n"
+		L"\n"
+		L"2.2.0  Added two help panels: what every value in the verdict column\n"
+		L"       means, and this version list. Both scroll, copy and follow the\n"
+		L"       interface language.\n"
+		L"\n"
+		L"2.1.4  A release the system refuses is no longer silent: it is counted,\n"
+		L"       written into the report, and mentioned once per run.\n"
+		L"\n"
+		L"2.1.3  Fixed a freeze: input is no longer injected from inside the mouse\n"
+		L"       hook callback. It used to stall all mouse input for a few\n"
+		L"       seconds, then leave this program alone dead to the world and\n"
+		L"       impossible to end without signing out.\n"
+		L"       Added the hang report: ten seconds of silence and the program\n"
+		L"       writes down where it stopped.\n"
 		L"\n"
 		L"2.1.2  Fixed a crash: the evidence line read a duration as a string\n"
 		L"       pointer, so any blocked click could close the program.\n"
@@ -211,16 +233,10 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 		L"       The window no longer opens off the screen.\n"
 		L"       Added the crash report bundle.\n"
 		L"\n"
-		L"2.1.3  Fixed a freeze: input is no longer injected from inside the\n"
-		L"       mouse hook callback. It used to stall all mouse input for a few\n"
-		L"       seconds, then leave only this program dead to the world and\n"
-		L"       impossible to end without signing out.\n"
-		L"       Added the hang report: ten seconds of silence and the program\n"
-		L"       writes down where it stopped.\n"
+		L"2.1.0 and 2.1.1 were internal steps and were never published.\n"
 		L"\n"
-		L"2.1.4  A release that cannot be delivered is no longer silent.\n"
-		L"\n"
-		L"2.1.0 and 2.1.1 were internal steps and were never published.",
+		L"2.0.0  First public build: double clicks, wheel reversal, drags that\n"
+		L"       broke in the middle.",
 
 	[STR_HELP_CLOSE] = L"Close",
 };
@@ -410,9 +426,25 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_VERSION_NOTES] = L"版本说明",
 	[STR_VERSION_NOTES_TITLE] = L"每个版本修了什么。",
 	[STR_VERSION_NOTES_TEXT] =
-		L"只列公开发布过的版本。\n"
+		L"只列公开发布过的版本，新的在上面。\n"
 		L"\n"
-		L"2.0.0  第一个公开版本：修双击、滚轮回跳、拖拽断触。\n"
+		L"2.2.1  点击光环更顺：60 帧、由粗变细、淡向背景色而不是白色；圆心多了\n"
+		L"       一个字（左 / 中 / 右），不用再靠颜色区分按键。\n"
+		L"       日志框恢复「选中并复制」：以前每来一次新点击，正在拖的选区就会被\n"
+		L"       清掉。\n"
+		L"       诊断包不再带 Windows 用户名和完整路径；同一秒内导出两次也不再\n"
+		L"       互相覆盖。\n"
+		L"       测试区的提示文字改为和窗口其他文字同一字体。\n"
+		L"\n"
+		L"2.2.0  新增两个说明窗口：判定列每个取值的含义，以及这份版本列表。\n"
+		L"       都能滚动、能复制，跟随界面语言。\n"
+		L"\n"
+		L"2.1.4  送不出去的松手不再静默：会计数、写进诊断报告，并在每次运行提示\n"
+		L"       一次。\n"
+		L"\n"
+		L"2.1.3  修复卡死：注入不再在鼠标钩子回调里发送。之前会先把全系统鼠标\n"
+		L"       卡住几秒，然后只有本程序点不动，进程还结束不掉，只能注销。\n"
+		L"       新增卡死报告：安静 10 秒就把停在哪写下来。\n"
 		L"\n"
 		L"2.1.2  修复闪退：拦截证据那行把毫秒数当成字符串指针去读，任何一次\n"
 		L"       被拦下的点击都可能让程序直接退出。\n"
@@ -421,13 +453,9 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 		L"       窗口不再跑到屏幕外。\n"
 		L"       新增崩溃报告包。\n"
 		L"\n"
-		L"2.1.3  修复卡死：注入不再在鼠标钩子回调里发送。之前会先把全系统鼠标\n"
-		L"       卡住几秒，然后只有本程序点不动，进程还结束不掉，只能注销。\n"
-		L"       新增卡死报告：安静 10 秒就把停在哪写下来。\n"
+		L"2.1.0 与 2.1.1 是内部版本，没有发布。\n"
 		L"\n"
-		L"2.1.4  送不出去的松手不再静默。\n"
-		L"\n"
-		L"2.1.0 与 2.1.1 是内部版本，没有发布。",
+		L"2.0.0  第一个公开版本：修双击、滚轮回跳、拖拽断触。",
 
 	[STR_HELP_CLOSE] = L"关闭",
 };
@@ -477,6 +505,23 @@ static const wchar_t *const BUTTON_SHORT_NAMES_ZH_CN[MOUSE_BUTTON_COUNT] = {
 	[MOUSE_BUTTON_HWHEEL] = L"横滚",
 };
 
+// One glyph per button, drawn inside the ring of the test area.
+//
+// A single glyph is square, so it centres exactly in a circle. It also says which
+// button was pressed without the user having to learn the colour code, which is
+// the only cue left to someone who cannot tell red from green.
+static const wchar_t *const BUTTON_MARKS_EN[MOUSE_BUTTON_COUNT] = {
+	[MOUSE_BUTTON_LEFT] = L"L",
+	[MOUSE_BUTTON_RIGHT] = L"R",
+	[MOUSE_BUTTON_MIDDLE] = L"M",
+};
+
+static const wchar_t *const BUTTON_MARKS_ZH_CN[MOUSE_BUTTON_COUNT] = {
+	[MOUSE_BUTTON_LEFT] = L"左",
+	[MOUSE_BUTTON_RIGHT] = L"右",
+	[MOUSE_BUTTON_MIDDLE] = L"中",
+};
+
 // Table lookup per language, so adding a language is a one-line change here
 static const wchar_t *const *const STRING_TABLES[LANG_COUNT] = {
 	[LANG_EN] = STRINGS_EN,
@@ -491,6 +536,11 @@ static const wchar_t *const *const BUTTON_NAME_TABLES[LANG_COUNT] = {
 static const wchar_t *const *const BUTTON_SHORT_NAME_TABLES[LANG_COUNT] = {
 	[LANG_EN] = BUTTON_SHORT_NAMES_EN,
 	[LANG_ZH_CN] = BUTTON_SHORT_NAMES_ZH_CN,
+};
+
+static const wchar_t *const *const BUTTON_MARK_TABLES[LANG_COUNT] = {
+	[LANG_EN] = BUTTON_MARKS_EN,
+	[LANG_ZH_CN] = BUTTON_MARKS_ZH_CN,
 };
 
 // Currently active language
@@ -589,6 +639,22 @@ const wchar_t *lang_button_short_name(MouseButton button)
 		name = BUTTON_SHORT_NAMES_EN[button];
 
 	return name ? name : L"";
+}
+
+// Get the single glyph drawn inside the test area ring
+// Empty for buttons that never draw a ring, so the caller can skip the text
+const wchar_t *lang_button_mark(MouseButton button)
+{
+	if (button < 0 || button >= MOUSE_BUTTON_COUNT)
+		return L"";
+
+	Language language = (g_language >= 0 && g_language < LANG_COUNT) ? g_language : LANG_EN;
+	const wchar_t *mark = BUTTON_MARK_TABLES[language][button];
+
+	if (!mark)
+		mark = BUTTON_MARKS_EN[button];
+
+	return mark ? mark : L"";
 }
 
 // Get the endonym of a language

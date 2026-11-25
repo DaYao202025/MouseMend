@@ -145,7 +145,16 @@ bool zip_begin(ZipWriter *writer, const wchar_t *path)
 
 	SecureZeroMemory(writer, sizeof(*writer));
 
-	writer->file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+	// Written under a temporary name and renamed when the central directory is
+	// complete. Writing straight to the final name meant a crash, a full disk or
+	// a scanner lock in the middle left a file with the real name that no tool
+	// can open - and it then counted against the keep-three quota and pushed a
+	// readable older bundle out.
+	if (FAILED(StringCchPrintfW(writer->part_path, ARRAYSIZE(writer->part_path),
+								L"%s.part", path)))
+		return false;
+
+	writer->file = CreateFileW(writer->part_path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
 							   FILE_ATTRIBUTE_NORMAL, NULL);
 
 	if (writer->file == INVALID_HANDLE_VALUE)
@@ -154,7 +163,7 @@ bool zip_begin(ZipWriter *writer, const wchar_t *path)
 		return false;
 	}
 
-	// Remembered so a failure can undo the empty file this call just created
+	// Remembered so a failure can undo the file this call just created
 	StringCchCopyW(writer->path, ARRAYSIZE(writer->path), path);
 
 	build_dos_stamp(&writer->dos_time, &writer->dos_date);
@@ -380,12 +389,24 @@ bool zip_end(ZipWriter *writer)
 	{
 		// A zip that no tool can open is worse than no zip: the user would attach
 		// it and we would spend a round trip discovering it is empty.
-		DeleteFileW(writer->path);
+		DeleteFileW(writer->part_path);
+		writer->part_path[0] = L'\0';
 		writer->path[0] = L'\0';
 		return false;
 	}
 
-	writer->path[0] = L'\0'; // Committed; a later abort must not delete it
+	// Publish. The rename is atomic within one volume, so the final name never
+	// refers to a half written archive.
+	if (!MoveFileExW(writer->part_path, writer->path, MOVEFILE_REPLACE_EXISTING))
+	{
+		DeleteFileW(writer->part_path);
+		writer->part_path[0] = L'\0';
+		writer->path[0] = L'\0';
+		return false;
+	}
+
+	writer->part_path[0] = L'\0'; // Committed; a later abort must not delete it
+	writer->path[0] = L'\0';
 	return true;
 }
 
@@ -400,11 +421,14 @@ void zip_abort(ZipWriter *writer)
 		writer->file = NULL;
 	}
 
-	if (writer->path[0] != L'\0')
+	// Only the temporary file exists before a successful end, so that is the one
+	// to remove; the published name is never half written
+	if (writer->part_path[0] != L'\0')
 	{
-		DeleteFileW(writer->path);
-		writer->path[0] = L'\0';
+		DeleteFileW(writer->part_path);
+		writer->part_path[0] = L'\0';
 	}
 
+	writer->path[0] = L'\0';
 	writer->ok = false;
 }

@@ -168,6 +168,9 @@ const wchar_t *lang_str(LangStringId id);
 // Get the localized name of a mouse button; never returns NULL
 const wchar_t *lang_button_name(MouseButton button);
 
+// Get the single glyph drawn inside the test area ring
+const wchar_t *lang_button_mark(MouseButton button);
+
 // Name used by the log panes: the same word without the space, because the
 // column has room for eight cells and "Side 1" would push the rest of the row.
 const wchar_t *lang_button_short_name(MouseButton button);

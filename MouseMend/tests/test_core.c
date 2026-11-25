@@ -1665,7 +1665,20 @@ static void test_checkup_formats(void)
 		{
 			CHECK(lang_display_width(lang_button_short_name((MouseButton)button)) <= 8);
 			CHECK(wcschr(lang_button_short_name((MouseButton)button), L' ') == NULL);
+
+			// The mark drawn inside the ring is one glyph at most: anything wider
+			// would not centre in the circle it sits in
+			CHECK(lang_display_width(lang_button_mark((MouseButton)button)) <= 2);
 		}
+
+		// The three buttons that draw a ring each get a mark, and no two share one
+		CHECK(lang_button_mark(MOUSE_BUTTON_LEFT)[0] != L'\0');
+		CHECK(wcscmp(lang_button_mark(MOUSE_BUTTON_LEFT), lang_button_mark(MOUSE_BUTTON_RIGHT)) != 0);
+		CHECK(wcscmp(lang_button_mark(MOUSE_BUTTON_LEFT), lang_button_mark(MOUSE_BUTTON_MIDDLE)) != 0);
+		CHECK(wcscmp(lang_button_mark(MOUSE_BUTTON_RIGHT), lang_button_mark(MOUSE_BUTTON_MIDDLE)) != 0);
+
+		// A wheel never draws a ring, so there is nothing to draw for it
+		CHECK(lang_button_mark(MOUSE_BUTTON_WHEEL)[0] == L'\0');
 
 		// The verdict starts at the same cell in the header and in every row, no
 		// matter which button name precedes it. Dropping the press counter paid

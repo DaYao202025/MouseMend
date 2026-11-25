@@ -33,6 +33,50 @@ static void to_utf8(const wchar_t *source, char *buffer, size_t buffer_count)
 		buffer[0] = '\0';
 }
 
+// Last component of a path
+static const wchar_t *path_file_name(const wchar_t *path)
+{
+	const wchar_t *name = path ? path : L"";
+
+	for (const wchar_t *cursor = name; *cursor; cursor++)
+	{
+		if (*cursor == L'\\' || *cursor == L'/')
+			name = cursor + 1;
+	}
+
+	return name;
+}
+
+// Where a path lives, in words that do not contain an account name
+//
+// The report is meant to be pasted into a public issue, and a full path carries
+// the Windows user name, the folder it sits in and what that says about the
+// person. What actually helps is knowing whether the program runs from Program
+// Files (permissions), from a per user folder, or from a stick - so that is what
+// gets written instead of the path.
+//
+// The comparison is case sensitive on purpose: these folders are spelled this
+// way by Windows, and it keeps this free of a locale aware compare.
+static const char *path_location_kind(const wchar_t *path)
+{
+	if (!path || !path[0])
+		return "unknown";
+
+	if (wcsstr(path, L"\\Program Files\\") || wcsstr(path, L"\\Program Files (x86)\\"))
+		return "program-files";
+
+	if (wcsstr(path, L"\\Desktop\\"))
+		return "desktop";
+
+	if (wcsstr(path, L"\\Downloads\\"))
+		return "downloads";
+
+	if (wcsstr(path, L"\\AppData\\"))
+		return "per-user";
+
+	return "other";
+}
+
 // Append one formatted line, keeping the buffer terminated at all times
 // Truncation is not an error: a partial report still helps, a failed export
 // means the user has nothing at all.
@@ -216,8 +260,10 @@ bool support_bundle_build_text(const SupportReport *report, char *buffer, size_t
 
 	buffer[0] = '\0';
 
-	char exe[UTF8_PATH_MAX];
-	to_utf8(report->exe_path, exe, ARRAYSIZE(exe));
+	// The file name only: the folder it sits in is reduced to a kind below, so
+	// the report never carries the Windows account name of whoever ran it
+	char exe[128];
+	to_utf8(path_file_name(report->exe_path), exe, ARRAYSIZE(exe));
 
 	char os[128];
 	to_utf8(report->os_version, os, ARRAYSIZE(os));
@@ -240,7 +286,8 @@ bool support_bundle_build_text(const SupportReport *report, char *buffer, size_t
 	append(buffer, buffer_count, "kind        : %s\n",
 		   report->hung ? "hang" : (report->crashed ? "crash" : "manual export"));
 	append(buffer, buffer_count, "version     : %s (%s)\n", APP_VERSION_STRING, arch);
-	append(buffer, buffer_count, "exe         : %s\n", exe);
+	append(buffer, buffer_count, "exe         : %s (%s)\n", exe,
+		   path_location_kind(report->exe_path));
 	append(buffer, buffer_count, "os          : %s\n", os);
 	append(buffer, buffer_count, "language    : %s\n", language);
 	append(buffer, buffer_count, "complete    : %s\n",
@@ -256,8 +303,10 @@ bool support_bundle_build_text(const SupportReport *report, char *buffer, size_t
 	// part that identifies the failure.
 	if (report->crashed)
 	{
-		char module[UTF8_PATH_MAX];
-		to_utf8(report->faulting_module, module, ARRAYSIZE(module));
+		// File name only again: the full path names the third party product and
+		// where the user installed it, which is not what the author needs to see
+		char module[128];
+		to_utf8(path_file_name(report->faulting_module), module, ARRAYSIZE(module));
 
 		append(buffer, buffer_count, "\nexception\n-----\n");
 		append(buffer, buffer_count, "code        : 0x%08lX\n", (unsigned long)report->exception_code);
@@ -279,10 +328,9 @@ bool support_bundle_build_text(const SupportReport *report, char *buffer, size_t
 	append(buffer, buffer_count, "notify      : %s\n", report->notify_blocks ? "on" : "off");
 	append(buffer, buffer_count, "log_blocks  : %s\n", report->log_blocks ? "on" : "off");
 
-	char log_directory[UTF8_PATH_MAX];
-	to_utf8(report->log_directory, log_directory, ARRAYSIZE(log_directory));
-	if (log_directory[0])
-		append(buffer, buffer_count, "log_dir     : %s\n", log_directory);
+	if (report->log_directory[0])
+		append(buffer, buffer_count, "log_at      : %s\n",
+			   path_location_kind(report->log_directory));
 
 	append(buffer, buffer_count, "total_blocks: %u\n", (unsigned)report->total_blocks);
 
@@ -330,8 +378,10 @@ static size_t build_readme(char *buffer, size_t buffer_count)
 		L"\r\n"
 		L"关于隐私（请先看一眼再决定）：\r\n"
 		L"\r\n"
-		L"  crash.dmp 里含有程序运行时的内存片段，可能夹带文件路径、窗口标题等文字；\r\n"
-		L"  report.txt 里含有鼠标点击的屏幕坐标。\r\n"
+		L"  crash.dmp 里含有程序运行时的内存片段：所有线程的栈、已加载 DLL 的完整路径，\r\n"
+		L"  可能夹带文件路径、窗口标题等文字。\r\n"
+		L"  report.txt 里含有鼠标点击的屏幕坐标和点击节奏，但不含 Windows 用户名、完整\r\n"
+		L"  文件路径、窗口标题、进程名和键盘输入。\r\n"
 		L"\r\n"
 		L"  不想公开这些的话，可以只发 report.txt，或者私下发给作者。\r\n"
 		L"\r\n"
@@ -519,6 +569,25 @@ static bool support_bundle_write_inner(SupportReport *report, const wchar_t *dum
 		if (FAILED(StringCchPrintfW(candidate, ARRAYSIZE(candidate), L"%s\\%s-%s.zip",
 									directories[i], prefix, report->stamp)))
 			continue;
+
+		// The name only carries whole seconds, so two exports in the same second
+		// used to replace each other without a word. A numeric suffix keeps both.
+		if (GetFileAttributesW(candidate) != INVALID_FILE_ATTRIBUTES)
+		{
+			for (int suffix = 2; suffix < 10; suffix++)
+			{
+				wchar_t numbered[MAX_PATH];
+
+				if (FAILED(StringCchPrintfW(numbered, ARRAYSIZE(numbered), L"%s\\%s-%s-%d.zip",
+											directories[i], prefix, report->stamp, suffix)))
+					break;
+
+				StringCchCopyW(candidate, ARRAYSIZE(candidate), numbered);
+
+				if (GetFileAttributesW(candidate) == INVALID_FILE_ATTRIBUTES)
+					break;
+			}
+		}
 
 		if (!zip_begin(&writer, candidate))
 			continue;

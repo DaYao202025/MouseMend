@@ -76,3 +76,15 @@ bool block_log_describe_directory(wchar_t *buffer, size_t buffer_count);
 
 // Append one entry to today's file, creating the directory and file as needed
 bool block_log_write(const wchar_t *directory, const SYSTEMTIME *base, const BlockLogEntry *entry);
+
+// Append several entries, opening the file once for the whole batch
+//
+// The drain runs on the thread that also serves the mouse hook, so the per-entry
+// cost of open/close used to be the most expensive thing on that thread: sixteen
+// entries meant sixteen opens, sixteen directory checks and sixteen attribute
+// queries inside one 200 ms tick.
+// Returns:
+//   number of entries actually written; fewer than count means the disk or the
+//   directory refused the rest
+size_t block_log_write_many(const wchar_t *directory, const SYSTEMTIME *base,
+							const BlockLogEntry *entries, size_t count);
