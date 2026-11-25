@@ -40,6 +40,9 @@ static void reset_state(DebounceManager *manager)
 		manager->buttons[i].downTime = 0;
 		manager->buttons[i].isBlocked = false;
 		manager->buttons[i].isDeferringRelease = false;
+		manager->buttons[i].pending_replay = false;
+		manager->buttons[i].replay_in_flight = false;
+		manager->buttons[i].release_after_replay = false;
 		manager->buttons[i].wheelDirection = 0;
 	}
 }
@@ -109,12 +112,21 @@ void test_smart_drag_run(void)
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 	CHECK(debounce_has_pending_deferrals(&manager));
 
-	// A new press while a release is deferred must not be swallowed: the pending
-	// release is flushed first and the press is then evaluated normally.
+	// A new press while a release is held back is swallowed and replayed by the
+	// timer together with that release. It is deliberately not passed straight
+	// through: the release has to reach the system first, and injecting it from
+	// here - inside the hook callback - is what used to freeze the whole process.
 	MouseEvent drag_down2 = make_event(MOUSE_BUTTON_LEFT, 3400, true, 100, 100, 0);
-	CHECK(!debounce_process_event(&manager, &drag_down2));
+	CHECK(debounce_process_event(&manager, &drag_down2));
 	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
 	CHECK(!debounce_has_pending_deferrals(&manager));
+
+	// The timer has to keep running for the replay to happen at all
+	CHECK(debounce_has_pending_work(&manager));
+
+	debounce_drop_replays(&manager);
+	CHECK(!debounce_has_pending_work(&manager));
 
 	// ------------------------------------------------------------------
 	// Moving further than the drag distance also defers the release
@@ -274,6 +286,46 @@ void test_smart_drag_run(void)
 	CHECK(!debounce_process_event(&manager, &tight_down));
 	CHECK(debounce_process_event(&manager, &tight_up));
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+
+	// ------------------------------------------------------------------
+	// A queued replay is dropped when the user lets go before it runs
+	// ------------------------------------------------------------------
+	reset_state(&manager);
+	debounce_set_defer_available(&manager, true);
+
+	MouseEvent replay_down = make_event(MOUSE_BUTTON_LEFT, 20000, true, 100, 100, 0);
+	MouseEvent replay_up = make_event(MOUSE_BUTTON_LEFT, 20300, false, 100, 100, 0);
+	MouseEvent replay_press = make_event(MOUSE_BUTTON_LEFT, 20340, true, 100, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &replay_down));
+	CHECK(debounce_process_event(&manager, &replay_up));
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+
+	CHECK(debounce_process_event(&manager, &replay_press));
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
+
+	// The release arrives before the timer ever ran. Replaying the press now
+	// would leave the button held with nothing left to release it.
+	MouseEvent replay_release = make_event(MOUSE_BUTTON_LEFT, 20350, false, 100, 100, 0);
+	debounce_process_event(&manager, &replay_release);
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
+	CHECK(!debounce_has_pending_work(&manager));
+
+	// ------------------------------------------------------------------
+	// With no timer to give a release back, nothing may be held back
+	// ------------------------------------------------------------------
+	reset_state(&manager);
+	debounce_set_defer_available(&manager, false);
+
+	MouseEvent nohold_down = make_event(MOUSE_BUTTON_LEFT, 21000, true, 100, 100, 0);
+	MouseEvent nohold_up = make_event(MOUSE_BUTTON_LEFT, 21300, false, 100, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &nohold_down));
+	CHECK(!debounce_process_event(&manager, &nohold_up));
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+	CHECK(!debounce_has_pending_work(&manager));
+
+	debounce_set_defer_available(&manager, true);
 
 	debounce_flush_deferred_releases(&manager);
 

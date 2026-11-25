@@ -190,24 +190,34 @@ static uint32_t PollMouseButtons(void)
 	return mask;
 }
 
-// Make sure the deferred-release timer is running while a release is pending.
-// This must be evaluated even when the current event is blocked, because the
-// event that starts a deferral is itself swallowed by the hook.
-static void EnsureDeferredReleaseTimer(void)
+// Make sure the timer that gives a held release back can run at all.
+//
+// Called on a physical press, i.e. before the engine is allowed to hold anything
+// back. If the timer cannot be created the engine is told never to defer:
+// holding a release with no way to deliver it leaves the button pressed inside
+// the system, and the old fallback - deliver it right here - was itself a
+// SendInput from inside the hook callback. That fallback is what used to make a
+// timer failure indistinguishable from the deadlock it was meant to prevent.
+static void EnsureSmartDragTimer(void)
 {
-	if (g_app.deferred_timer_armed || !debounce_has_pending_deferrals(&g_app.debounce))
+	// Without a window the timer would be a thread timer whose WM_TIMER nobody
+	// dispatches: the release would be held forever. Without a live engine there
+	// is no state to touch either.
+	if (!g_app.debounce_ready || !g_app.hWnd)
+		return;
+
+	if (g_app.deferred_timer_armed)
 		return;
 
 	if (SetTimer(g_app.hWnd, TIMER_DEFERRED_RELEASE, TIMER_INTERVAL_MS, NULL))
 	{
 		g_app.deferred_timer_armed = true;
+		debounce_set_defer_available(&g_app.debounce, true);
 		return;
 	}
 
-	// Timer could not be created: never leave the button logically stuck.
-	// Release now instead of applying the debounce delay.
-	debounce_check_deferred_releases(&g_app.debounce);
-	debounce_flush_deferred_releases(&g_app.debounce);
+	// No timer: Smart Drag stops holding releases, everything else keeps working.
+	debounce_set_defer_available(&g_app.debounce, false);
 }
 
 // Mouse hook callback
@@ -257,8 +267,16 @@ static LRESULT CALLBACK OnMouseHookCallback(const MouseEvent *event, void *user_
 	// last-input time to notice a hook that Windows removed behind our back.
 	app->hook_events++;
 
-	// Arm the deferred-release timer before returning, even for blocked events.
-	EnsureDeferredReleaseTimer();
+	// Arm the timer that can give a held release back, on the press rather than
+	// on the release, so the engine only ever holds one it is able to return.
+	if (event->is_down && !event->is_injected)
+		EnsureSmartDragTimer();
+
+	// A replayed press is swallowed as well, but it is not a blocked false click:
+	// no log line, no balloon, no evidence entry. The timer delivers it back
+	// right behind the release that was held in front of it.
+	if (decision.replay)
+		return 1;
 
 	if (blocked)
 	{
@@ -808,10 +826,16 @@ static void ShutdownApp(void)
 	g_app.notify_requested = false;
 	g_app.log_flush_requested = false;
 
-	// Release any release that is still deferred, otherwise the button would
-	// stay logically pressed after this process is gone.
+	// Release any release that is still held back, otherwise the button would
+	// stay logically pressed after this process is gone. A press that was queued
+	// for replay is dropped instead of being delivered into a dying window, but
+	// the release it was holding is given back first - that release is the only
+	// thing standing between the user and a button stuck down.
 	if (g_app.debounce_ready)
+	{
+		debounce_drop_replays(&g_app.debounce);
 		debounce_flush_deferred_releases(&g_app.debounce);
+	}
 
 	// Remove tray icon
 	if (g_app.tray_ready)
@@ -1345,8 +1369,12 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 		{
 			debounce_check_deferred_releases(&g_app.debounce);
 
-			// Stop polling as soon as there is nothing left to release
-			if (!debounce_has_pending_deferrals(&g_app.debounce))
+			// Replays run here and nowhere else: this is the one place on the
+			// input path that is guaranteed to be outside the hook callback.
+			debounce_service_replay(&g_app.debounce);
+
+			// Stop polling as soon as there is nothing left to release or replay
+			if (!debounce_has_pending_work(&g_app.debounce))
 			{
 				KillTimer(hWnd, TIMER_DEFERRED_RELEASE);
 				g_app.deferred_timer_armed = false;

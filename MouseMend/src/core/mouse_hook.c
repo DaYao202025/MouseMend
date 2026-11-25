@@ -6,10 +6,18 @@
 // because low-level hooks are dispatched to the thread that installed them.
 static MouseHookManager *g_manager = NULL;
 
+// How deep the current thread is inside the callback. Non-zero means an
+// injection from this stack would wait on itself - see mouse_hook_in_callback.
+static volatile LONG g_callback_depth = 0;
+
 // Low-level mouse hook callback
 static LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
 	MouseHookManager *manager = g_manager;
+	LRESULT outcome = 0;
+	bool handled = false;
+
+	InterlockedIncrement(&g_callback_depth);
 
 	if (nCode == HC_ACTION && manager)
 	{
@@ -46,12 +54,27 @@ static LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lPara
 
 				LRESULT result = manager->callback(&event, manager->user_data);
 				if (result != 0)
-					return result;
+				{
+					outcome = result;
+					handled = true;
+				}
 			}
 		}
 	}
 
-	return CallNextHookEx(manager ? manager->hook : NULL, nCode, wParam, lParam);
+	if (!handled)
+		outcome = CallNextHookEx(manager ? manager->hook : NULL, nCode, wParam, lParam);
+
+	// Both exits pass through here, so the depth can never be left behind by an
+	// early return: a stale depth would silently disable every later injection.
+	InterlockedDecrement(&g_callback_depth);
+
+	return outcome;
+}
+
+bool mouse_hook_in_callback(void)
+{
+	return g_callback_depth != 0;
 }
 
 // Initialize mouse hook manager

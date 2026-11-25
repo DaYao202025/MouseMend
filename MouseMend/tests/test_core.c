@@ -932,16 +932,23 @@ static void test_debounce_decision(void)
 	next_press.x = 10;
 	next_press.y = 10;
 
-	CHECK(!debounce_process_event_ex(&manager, &next_press, &decision));
+	// The press is swallowed and replayed by the timer, not passed through: the
+	// release it was held behind has to reach the system first, and injecting it
+	// from inside the hook callback is what used to deadlock the whole process.
+	CHECK(debounce_process_event_ex(&manager, &next_press, &decision));
 	CHECK(decision.reason == DEBOUNCE_REASON_PASS_FLUSHED);
 	CHECK(decision.flushed_deferred);
+	CHECK(decision.replay);
+
+	// Still not a false click: the counters, the block log and the balloon all
+	// have to skip it, otherwise the user is told a click was blocked when it
+	// was only held back for a few milliseconds.
 	CHECK(!decision.blocked);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
 
 	// A long hold makes the two intervals diverge, and the log must show the
-	// press-to-press one rather than the engine's much smaller number.
-	// (The engine's value is not asserted exactly here: forcing a held release
-	// re-bases previousTime on the real clock, which a synthetic test clock
-	// cannot reproduce.)
+	// press-to-press one rather than the engine's much smaller number. The engine
+	// measures from the press itself, which is the only writer of previousTime.
 	CHECK(decision.has_press_gap);
 	CHECK(decision.press_gap_ms == 340);
 	CHECK(decision.elapsed_ms < decision.press_gap_ms);

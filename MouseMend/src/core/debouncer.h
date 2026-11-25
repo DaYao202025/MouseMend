@@ -36,6 +36,19 @@ typedef struct
 	bool isBlocked;			 // Whether the next event should be blocked
 	bool isDeferringRelease; // Whether we are waiting to confirm a release
 	bool hasPressGap;		 // Whether pressGapMs is valid (diagnostics only)
+
+	// Replay: a press that arrived while a release was still held back is
+	// swallowed and re-injected by the timer together with that release.
+	//
+	// It cannot be injected here. The callback runs on the thread that owns the
+	// hook, and injecting from that stack makes SendInput wait for itself.
+	bool pending_replay;	 // Swallowed press waiting for the timer
+	bool replay_in_flight;	 // Timer is injecting it right now
+	bool release_after_replay; // A real release arrived during the injection
+	uint32_t replay_down_flags;
+	uint32_t replay_down_data;
+	POINT replay_point;		 // Where the swallowed press happened
+	uint64_t replay_press_time;
 } __declspec(align(64)) ButtonDebounceData;
 
 // Debounce manager with cache line alignment for performance
@@ -43,6 +56,11 @@ typedef struct
 {
 	ButtonDebounceData buttons[MOUSE_BUTTON_COUNT]; // Array of button debounce data
 	bool use_hybrid_heuristic;						// Whether to use the Hybrid Heuristic Scheme
+
+	// Whether a release may be held back at all. Cleared when the application
+	// could not arm the timer that gives the release back: holding one without
+	// a way to deliver it would leave the button pressed inside the system.
+	bool defer_available;
 	uint32_t releaseDelayMs;						// Deferred release delay (Smart Drag)
 	uint32_t dragHoldTimeMs;						// Hold time that counts as a drag
 	uint32_t dragDistancePx;						// Movement that counts as a drag
@@ -80,6 +98,11 @@ typedef struct
 	bool blocked;		  // Same value debounce_process_event returns
 	bool deferred;		  // This release was held back
 	bool flushed_deferred; // A held release was delivered before this press
+
+	// This press was swallowed and will be replayed by the timer right after
+	// that release. It is NOT a blocked false click: counters, the block log and
+	// the balloon all have to skip it.
+	bool replay;
 	bool first_event;	  // No earlier event for this button in this session
 	uint64_t elapsed_ms;   // Time since the previous event of this button
 
@@ -180,3 +203,20 @@ void debounce_check_deferred_releases(DebounceManager *manager);
 
 // Release every deferred button immediately (safety net when the timer is unavailable)
 void debounce_flush_deferred_releases(DebounceManager *manager);
+
+// Tell the engine whether a held release could be given back at all
+// Call with false when the deferred-release timer cannot be armed: holding a
+// release without a way to deliver it is how a button ends up pressed forever.
+void debounce_set_defer_available(DebounceManager *manager, bool available);
+
+// Whether anything still needs the timer: a held release or a pending replay
+bool debounce_has_pending_work(DebounceManager *manager);
+
+// Run queued replays. Must only be called from the timer, never from the hook.
+// Injects the held release first and then the press that was swallowed behind
+// it, so the system sees the same order it would have seen without the filter.
+void debounce_service_replay(DebounceManager *manager);
+
+// Forget queued replays without running them. Used on shutdown, where a press
+// replayed into a dying process is pointless and only risks a stuck button.
+void debounce_drop_replays(DebounceManager *manager);

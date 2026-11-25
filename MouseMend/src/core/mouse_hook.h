@@ -71,3 +71,15 @@ LONG mouse_hook_event_count(const MouseHookManager *manager);
 // Uses its own local hook and never touches the manager, so it is safe to call
 // from a process that is already filtering input.
 bool mouse_hook_probe(void);
+
+// Whether the calling thread is currently inside the hook callback.
+//
+// Injecting input from inside a low-level hook deadlocks: the injected event has
+// to travel the hook chain again, and the chain head is the very thread that is
+// already waiting inside SendInput. Windows only removes the hook after the
+// timeout, so the rest of the system recovers while the blocked thread never
+// does - the process can then only be removed by signing out.
+//
+// Every injection therefore asks this first. It is deliberately not an assert:
+// refusing costs one lost release, deadlocking costs a reboot.
+bool mouse_hook_in_callback(void);

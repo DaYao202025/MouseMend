@@ -5,6 +5,115 @@
 // Forward declarations (the release helpers are defined below)
 static bool release_deferred_button(DebounceManager *manager, int button, bool force);
 static void release_deferred_buttons(DebounceManager *manager, bool force);
+static bool deferred_release_take(DebounceManager *manager, int button);
+
+// Injections refused because they were attempted from inside the hook callback.
+// It has to stay at zero: every unit here is a release the user lost because
+// something started injecting from the wrong stack again.
+static volatile LONG g_injection_refused = 0;
+
+// Every injection in this module goes through these two.
+//
+// The callback runs on the thread that owns the hook. SendInput made from that
+// stack has to travel the hook chain again and finds its head busy waiting for
+// itself, so the thread never returns and the process can only be removed by
+// signing out. Refusing costs one lost release; that is the cheaper failure by
+// a wide margin.
+static bool inject_mouse(DWORD flags, DWORD data)
+{
+	if (mouse_hook_in_callback())
+	{
+		InterlockedIncrement(&g_injection_refused);
+		return false;
+	}
+
+	INPUT input;
+	memset(&input, 0, sizeof(input));
+	input.type = INPUT_MOUSE;
+	input.mi.dwFlags = flags;
+	input.mi.mouseData = data;
+
+	return SendInput(1, &input, sizeof(input)) == 1;
+}
+
+static bool inject_mouse_pair(const INPUT *inputs, UINT count)
+{
+	if (mouse_hook_in_callback())
+	{
+		InterlockedIncrement(&g_injection_refused);
+		return false;
+	}
+
+	return SendInput(count, (LPINPUT)inputs, sizeof(INPUT)) == count;
+}
+
+// MOUSEEVENTF flags for one button, or false when that button has none
+static bool button_up_flags(int button, DWORD *out_flags, DWORD *out_data)
+{
+	DWORD flags = 0;
+	DWORD data = 0;
+
+	switch (button)
+	{
+	case MOUSE_BUTTON_LEFT:
+		flags = MOUSEEVENTF_LEFTUP;
+		break;
+	case MOUSE_BUTTON_RIGHT:
+		flags = MOUSEEVENTF_RIGHTUP;
+		break;
+	case MOUSE_BUTTON_MIDDLE:
+		flags = MOUSEEVENTF_MIDDLEUP;
+		break;
+	case MOUSE_BUTTON_X1:
+		flags = MOUSEEVENTF_XUP;
+		data = XBUTTON1;
+		break;
+	case MOUSE_BUTTON_X2:
+		flags = MOUSEEVENTF_XUP;
+		data = XBUTTON2;
+		break;
+	default:
+		// Wheel axes are never deferred
+		return false;
+	}
+
+	*out_flags = flags;
+	*out_data = data;
+	return true;
+}
+
+static bool button_down_flags(int button, DWORD *out_flags, DWORD *out_data)
+{
+	DWORD flags = 0;
+	DWORD data = 0;
+
+	switch (button)
+	{
+	case MOUSE_BUTTON_LEFT:
+		flags = MOUSEEVENTF_LEFTDOWN;
+		break;
+	case MOUSE_BUTTON_RIGHT:
+		flags = MOUSEEVENTF_RIGHTDOWN;
+		break;
+	case MOUSE_BUTTON_MIDDLE:
+		flags = MOUSEEVENTF_MIDDLEDOWN;
+		break;
+	case MOUSE_BUTTON_X1:
+		flags = MOUSEEVENTF_XDOWN;
+		data = XBUTTON1;
+		break;
+	case MOUSE_BUTTON_X2:
+		flags = MOUSEEVENTF_XDOWN;
+		data = XBUTTON2;
+		break;
+	default:
+		return false;
+	}
+
+	*out_flags = flags;
+	*out_data = data;
+	return true;
+}
 
 // Elapsed time between two timestamps, guarded against underflow
 // A caller that supplies timestamps from another clock source would otherwise
@@ -26,6 +135,7 @@ bool debounce_init(DebounceManager *manager)
 
 	memset(manager, 0, sizeof(DebounceManager));
 	manager->use_hybrid_heuristic = true; // Default to enabled
+	manager->defer_available = true;	  // Unless the application says otherwise
 
 	// Smart Drag Protection tuning defaults
 	manager->releaseDelayMs = RELEASE_DELAY_DEFAULT_MS;
@@ -84,48 +194,26 @@ static bool release_deferred_button(DebounceManager *manager, int button, bool f
 		return false;
 	}
 
-	data->isDeferringRelease = false;
-
-	// The release is being delivered now, so it becomes the reference point for
-	// the next bounce check.
-	data->previousTime = GetTickCount64();
-
-	switch (button)
+	if (!button_up_flags(button, &flags, &mouse_data))
 	{
-	case MOUSE_BUTTON_LEFT:
-		flags = MOUSEEVENTF_LEFTUP;
-		break;
-	case MOUSE_BUTTON_RIGHT:
-		flags = MOUSEEVENTF_RIGHTUP;
-		break;
-	case MOUSE_BUTTON_MIDDLE:
-		flags = MOUSEEVENTF_MIDDLEUP;
-		break;
-	case MOUSE_BUTTON_X1:
-		flags = MOUSEEVENTF_XUP;
-		mouse_data = XBUTTON1;
-		break;
-	case MOUSE_BUTTON_X2:
-		flags = MOUSEEVENTF_XUP;
-		mouse_data = XBUTTON2;
-		break;
-	default:
 		// Wheel axes are never deferred
-		break;
+		LeaveCriticalSection(&manager->cs);
+		return false;
 	}
 
+	// Clear first, deliver second. A failed delivery is given up on rather than
+	// retried: the alternative is a timer that spins forever on a release the
+	// system keeps refusing, which is exactly the "wait without an end" that
+	// produced the hang this code was fixed for.
+	data->isDeferringRelease = false;
+
+	// previousTime is deliberately left alone. The press that forced this
+	// release writes its own timestamp a few lines later, and the wall clock
+	// written here used to be overwritten by it anyway - two writers, one value
+	// surviving, and a baseline that could drift by whatever ran in between.
 	LeaveCriticalSection(&manager->cs);
 
-	if (!flags)
-		return false;
-
-	INPUT input = {0};
-	input.type = INPUT_MOUSE;
-	input.mi.dwFlags = flags;
-	input.mi.mouseData = mouse_data;
-	SendInput(1, &input, sizeof(INPUT));
-
-	return true;
+	return inject_mouse(flags, mouse_data);
 }
 
 // Stable, language independent name of a verdict
@@ -201,15 +289,51 @@ bool debounce_process_event_ex(DebounceManager *manager, const MouseEvent *event
 	if (event->button < 0 || event->button >= MOUSE_BUTTON_COUNT)
 		return false;
 
-	// A fresh press must never be swallowed by a release that is still deferred.
-	// Flush that release first (outside the critical section) so the new press is
-	// evaluated normally instead of being treated as switch bounce.
-	bool flushed_on_press = false;
+	// A fresh press must never be swallowed by a release that is still held back.
+	// That release is taken before the press is judged, otherwise the press would
+	// be mistaken for switch bounce.
+	//
+	// "Taken", not delivered: delivering it means SendInput, and this runs inside
+	// the hook callback, where SendInput waits on itself forever. The timer
+	// injects the release and then the press that was swallowed behind it, so the
+	// system ends up seeing the same order it would have seen without a filter.
+	bool replay_pending = false;
+
 	if (!event->is_injected && event->is_down)
-		flushed_on_press = release_deferred_button(manager, event->button, true);
+	{
+		DWORD down_flags = 0;
+		DWORD down_data = 0;
+
+		// Flags first, take second: taking the release and then failing to
+		// build the press that replaces it would drop the release for good.
+		if (button_down_flags(event->button, &down_flags, &down_data) &&
+			deferred_release_take(manager, event->button))
+		{
+			EnterCriticalSection(&manager->cs);
+
+			ButtonDebounceData *held = &manager->buttons[event->button];
+			held->pending_replay = true;
+			held->replay_in_flight = false;
+			held->release_after_replay = false;
+			held->replay_down_flags = down_flags;
+			held->replay_down_data = down_data;
+			held->replay_point.x = event->x;
+			held->replay_point.y = event->y;
+			held->replay_press_time = event->timestamp;
+
+			LeaveCriticalSection(&manager->cs);
+
+			replay_pending = true;
+		}
+	}
+
+	bool flushed_on_press = replay_pending;
 
 	if (decision)
-		decision->flushed_deferred = flushed_on_press;
+	{
+		decision->flushed_deferred = replay_pending;
+		decision->replay = replay_pending;
+	}
 
 	EnterCriticalSection(&manager->cs);
 
@@ -351,6 +475,17 @@ bool debounce_process_event_ex(DebounceManager *manager, const MouseEvent *event
 	}
 	else
 	{
+		// A replay that has not started yet is cancelled here. The user really did
+		// let go, the release is on its way to the system, and injecting the press
+		// now would leave the button held with nothing left to release it.
+		if (data->pending_replay)
+		{
+			if (data->replay_in_flight)
+				data->release_after_replay = true; // the injector undoes it
+			else
+				data->pending_replay = false;
+		}
+
 		// Button up event
 		//
 		// A blocked press expects its release right behind it. If that release
@@ -373,7 +508,7 @@ bool debounce_process_event_ex(DebounceManager *manager, const MouseEvent *event
 
 		// Hybrid Heuristic: hold the release back briefly so that a bouncing
 		// switch cannot interrupt an ongoing drag, then re-inject it.
-		if (!should_block && manager->use_hybrid_heuristic)
+		if (!should_block && manager->use_hybrid_heuristic && manager->defer_available)
 		{
 			uint64_t hold_time = elapsed_since(event->timestamp, data->downTime);
 			long dx = event->x - data->downPoint.x;
@@ -417,7 +552,9 @@ bool debounce_process_event_ex(DebounceManager *manager, const MouseEvent *event
 		}
 	}
 
-	return should_block;
+	// A replayed press is swallowed too, even though it is not counted as a
+	// blocked click: the caller has to keep it from reaching the system as is.
+	return should_block || replay_pending;
 }
 
 // Set debounce threshold for a specific button
@@ -763,4 +900,177 @@ void debounce_flush_deferred_releases(DebounceManager *manager)
 		return;
 
 	release_deferred_buttons(manager, true);
+}
+
+// Take a held release out of the pending state without delivering it
+//
+// The hook path uses this. The state change happens here, the injection is the
+// timer's job - see debounce_service_replay for why the order matters.
+static bool deferred_release_take(DebounceManager *manager, int button)
+{
+	if (!manager || button < 0 || button >= MOUSE_BUTTON_COUNT)
+		return false;
+
+	bool taken = false;
+
+	EnterCriticalSection(&manager->cs);
+
+	ButtonDebounceData *data = &manager->buttons[button];
+	if (data->isDeferringRelease)
+	{
+		data->isDeferringRelease = false;
+		taken = true;
+	}
+
+	LeaveCriticalSection(&manager->cs);
+
+	return taken;
+}
+
+void debounce_set_defer_available(DebounceManager *manager, bool available)
+{
+	if (!manager)
+		return;
+
+	EnterCriticalSection(&manager->cs);
+	manager->defer_available = available;
+	LeaveCriticalSection(&manager->cs);
+}
+
+bool debounce_has_pending_work(DebounceManager *manager)
+{
+	if (!manager)
+		return false;
+
+	bool pending = false;
+
+	EnterCriticalSection(&manager->cs);
+
+	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
+	{
+		if (manager->buttons[i].isDeferringRelease || manager->buttons[i].pending_replay)
+		{
+			pending = true;
+			break;
+		}
+	}
+
+	LeaveCriticalSection(&manager->cs);
+	return pending;
+}
+
+void debounce_service_replay(DebounceManager *manager)
+{
+	if (!manager)
+		return;
+
+	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
+	{
+		DWORD up_flags = 0;
+		DWORD up_data = 0;
+		DWORD down_flags = 0;
+		DWORD down_data = 0;
+		POINT point = {0, 0};
+		bool run = false;
+
+		if (!button_up_flags(i, &up_flags, &up_data) ||
+			!button_down_flags(i, &down_flags, &down_data))
+			continue; // wheels are never replayed
+
+		EnterCriticalSection(&manager->cs);
+
+		ButtonDebounceData *data = &manager->buttons[i];
+		if (data->pending_replay && !data->replay_in_flight)
+		{
+			data->replay_in_flight = true;
+			point = data->replay_point;
+			down_flags = data->replay_down_flags;
+			down_data = data->replay_down_data;
+			run = true;
+		}
+
+		LeaveCriticalSection(&manager->cs);
+
+		if (!run)
+			continue;
+
+		// The release first, then the press that was swallowed behind it, in a
+		// single call so nothing can slip in between the two.
+		INPUT inputs[2];
+		memset(inputs, 0, sizeof(inputs));
+
+		inputs[0].type = INPUT_MOUSE;
+		inputs[0].mi.dwFlags = up_flags;
+		inputs[0].mi.mouseData = up_data;
+
+		inputs[1].type = INPUT_MOUSE;
+		inputs[1].mi.dwFlags = down_flags | MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+		inputs[1].mi.mouseData = down_data;
+
+		int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+		int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+		int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+		int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+		// The hook already reports screen coordinates, so the only conversion
+		// needed is the 0..65535 range that MOUSEEVENTF_ABSOLUTE expects. It
+		// matters that the press lands where it happened: a press replayed
+		// somewhere else would make the next release look like a drag.
+		inputs[1].mi.dx = (vw > 1) ? MulDiv((int)point.x - vx, 65535, vw - 1) : 0;
+		inputs[1].mi.dy = (vh > 1) ? MulDiv((int)point.y - vy, 65535, vh - 1) : 0;
+
+		bool delivered = inject_mouse_pair(inputs, 2);
+
+		EnterCriticalSection(&manager->cs);
+
+		data->pending_replay = false;
+		data->replay_in_flight = false;
+
+		bool release_after = data->release_after_replay;
+		data->release_after_replay = false;
+
+		LeaveCriticalSection(&manager->cs);
+
+		// A release that arrived while the press was being replayed belongs to
+		// that press. Without this extra up the button stays held in the system
+		// until the next physical click.
+		if (delivered && release_after)
+			inject_mouse(up_flags, up_data);
+	}
+}
+
+void debounce_drop_replays(DebounceManager *manager)
+{
+	if (!manager)
+		return;
+
+	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
+	{
+		DWORD flags = 0;
+		DWORD data = 0;
+		bool give_back = false;
+
+		if (!button_up_flags(i, &flags, &data))
+			continue;
+
+		EnterCriticalSection(&manager->cs);
+
+		ButtonDebounceData *button = &manager->buttons[i];
+		if (button->pending_replay)
+		{
+			button->pending_replay = false;
+			button->replay_in_flight = false;
+			button->release_after_replay = false;
+			give_back = true;
+		}
+
+		LeaveCriticalSection(&manager->cs);
+
+		// The queued press is dropped on purpose - the process is going away and
+		// re-playing it into a dying window would only inject a press nobody
+		// releases. The release it was holding is a different matter: without it
+		// the button stays pressed inside the system after this process is gone.
+		if (give_back)
+			inject_mouse(flags, data);
+	}
 }
