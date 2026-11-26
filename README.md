@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.2.2-blue.svg)
+![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-informational.svg)
 ![Toolset](https://img.shields.io/badge/toolset-MSVC%20v145-purple.svg)
@@ -18,6 +18,17 @@
 [English](#english) · [中文](#中文) · [**Full documentation / 完整文档**](MouseMend/README.md)
 
 </div>
+
+---
+
+## Download / 下载
+
+Latest release / 最新版本：**[v2.3.0](https://github.com/DaYao202025/MouseMend/releases/tag/v2.3.0)**
+
+- `MouseMend-x64.exe` —— 64 位 Windows 用这个 / for 64-bit Windows
+- `MouseMend-x86.exe` —— 仅 32 位 Windows / 32-bit only
+
+The executables live on the release page, not in the tree. / 可执行文件只作为 Release 附件，不进代码树。
 
 ---
 
