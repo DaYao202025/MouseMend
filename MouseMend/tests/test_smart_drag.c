@@ -45,7 +45,13 @@ static MouseEvent make_event(MouseButton button, uint64_t offset, bool is_down, 
 	return event;
 }
 
-// Reset the per-button transient state without touching the configuration
+// Reset the per-button transient state without touching the configuration.
+//
+// The deferral is left armed as of the time base, because a release is only ever
+// held back on a switch that has already been seen chattering, and the blocks
+// below that expect a held release are all about that switch. A block that needs
+// a healthy switch calls disarm_deferral() first, and the arming path itself is
+// tested explicitly further down.
 static void reset_state(DebounceManager *manager)
 {
 	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
@@ -58,7 +64,15 @@ static void reset_state(DebounceManager *manager)
 		manager->buttons[i].replay_in_flight = false;
 		manager->buttons[i].release_after_replay = false;
 		manager->buttons[i].wheelDirection = 0;
+		manager->buttons[i].system_down = false;
+		manager->buttons[i].deferArmedUntil = g_base + DEBOUNCE_CHATTER_ARM_MS;
 	}
+}
+
+static void disarm_deferral(DebounceManager *manager)
+{
+	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
+		manager->buttons[i].deferArmedUntil = 0;
 }
 
 void test_smart_drag_run(void)
@@ -85,6 +99,11 @@ void test_smart_drag_run(void)
 	debounce_set_monitored(&manager, MOUSE_BUTTON_WHEEL, true);
 	debounce_set_threshold(&manager, MOUSE_BUTTON_WHEEL, WHEEL_THRESHOLD_MS, 1, 200);
 	debounce_set_hybrid_heuristic(&manager, true);
+
+	// The shipped default is 0, which never holds a release back. The blocks
+	// below are about what happens when the hold is switched on, so they turn it
+	// on explicitly; the "off means off" case has its own check further down.
+	debounce_set_release_delay(&manager, 20, RELEASE_DELAY_MIN_MS, RELEASE_DELAY_MAX_MS);
 
 	// ------------------------------------------------------------------
 	// A normal click must pass through untouched
@@ -147,21 +166,113 @@ void test_smart_drag_run(void)
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 	CHECK(debounce_has_pending_deferrals(&manager));
 
-	// A new press while a release is held back is swallowed and replayed by the
-	// timer together with that release. It is deliberately not passed straight
-	// through: the release has to reach the system first, and injecting it from
-	// here - inside the hook callback - is what used to freeze the whole process.
+	// A press 20 ms after the release is the switch chattering, not a click. It
+	// is blocked, and the held release stays queued: the timer still owes the
+	// system that UP. Injecting a DOWN here - which is what the old replay did -
+	// pressed the button again on the user's behalf and left the pointer
+	// dragging a window when no release followed.
 	MouseEvent drag_down2 = make_event(MOUSE_BUTTON_LEFT, 3720, true, 140, 100, 0);
 	CHECK(debounce_process_event(&manager, &drag_down2));
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+	CHECK(debounce_has_pending_deferrals(&manager));
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
+
+	// Nothing may be injected from this stack - it is the hook's
+	CHECK(g_injected_count == 0);
+
+	// The timer owes exactly one event: the release, never a press
+	g_injected_count = 0;
+	manager.buttons[MOUSE_BUTTON_LEFT].deferStartTime = GetTickCount64() - 1000;
+	debounce_check_deferred_releases(&manager);
+	CHECK(g_injected_count == 1);
+	CHECK(g_injected[0].mi.dwFlags == MOUSEEVENTF_LEFTUP);
+	CHECK(!debounce_has_pending_work(&manager));
+
+	// ------------------------------------------------------------------
+	// A switch that has never chattered never has a release delayed
+	//
+	// This is the whole point of arming by evidence. Holding a release makes
+	// the system keep the button down, so the pointer drags whatever it is
+	// over - the exact "the window follows me after I let go" complaint. A
+	// healthy mouse must never pay that for a fault it does not have.
+	// ------------------------------------------------------------------
+	reset_state(&manager);
+	disarm_deferral(&manager);
+
+	MouseEvent healthy_down = make_event(MOUSE_BUTTON_LEFT, 3380, true, 100, 100, 0);
+	MouseEvent healthy_up = make_event(MOUSE_BUTTON_LEFT, 3700, false, 140, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &healthy_down));
+	CHECK(!debounce_process_event(&manager, &healthy_up));
 	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
-	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
 	CHECK(!debounce_has_pending_deferrals(&manager));
 
-	// The timer has to keep running for the replay to happen at all
-	CHECK(debounce_has_pending_work(&manager));
+	// ------------------------------------------------------------------
+	// A switch that double-contacts on the press must not eat the release
+	//
+	// down, then another down a few milliseconds later (the contact bounces),
+	// then the real release. The second down is correctly rejected, but the
+	// press before it did reach the system, so the release has to reach it as
+	// well: dropping it left the pointer dragging a window - the "it sticks
+	// after I let go" complaint - until the user clicked again.
+	// ------------------------------------------------------------------
+	reset_state(&manager);
+	disarm_deferral(&manager);
 
-	debounce_drop_replays(&manager);
-	CHECK(!debounce_has_pending_work(&manager));
+	MouseEvent contact_down = make_event(MOUSE_BUTTON_LEFT, 3480, true, 100, 100, 0);
+	MouseEvent contact_bounce = make_event(MOUSE_BUTTON_LEFT, 3490, true, 100, 100, 0);
+	MouseEvent contact_up = make_event(MOUSE_BUTTON_LEFT, 3900, false, 100, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &contact_down));
+	CHECK(debounce_process_event(&manager, &contact_bounce));
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isBlocked);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].system_down);
+
+	CHECK(!debounce_process_event(&manager, &contact_up)); // the real release
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isBlocked);
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].system_down);
+	CHECK(!debounce_has_pending_deferrals(&manager));
+
+	// ------------------------------------------------------------------
+	// One press the threshold rejects is the evidence, and it arms the
+	// deferral for the next minute of dragging
+	// ------------------------------------------------------------------
+	reset_state(&manager);
+	disarm_deferral(&manager);
+
+	MouseEvent chatter_down = make_event(MOUSE_BUTTON_LEFT, 3800, true, 100, 100, 0);
+	MouseEvent chatter_up = make_event(MOUSE_BUTTON_LEFT, 3810, false, 100, 100, 0);
+	MouseEvent chatter_bounce = make_event(MOUSE_BUTTON_LEFT, 3820, true, 100, 100, 0);
+	MouseEvent chatter_bounce_up = make_event(MOUSE_BUTTON_LEFT, 3830, false, 100, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &chatter_down));
+	CHECK(!debounce_process_event(&manager, &chatter_up));
+	CHECK(debounce_process_event(&manager, &chatter_bounce));	 // rejected as a bounce
+	CHECK(debounce_process_event(&manager, &chatter_bounce_up)); // its own release too
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].deferArmedUntil ==
+		  chatter_bounce.timestamp + DEBOUNCE_CHATTER_ARM_MS);
+
+	// The same drag that was let through above is now held back
+	MouseEvent armed_down = make_event(MOUSE_BUTTON_LEFT, 4000, true, 100, 100, 0);
+	MouseEvent armed_up = make_event(MOUSE_BUTTON_LEFT, 4400, false, 140, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &armed_down));
+	CHECK(debounce_process_event(&manager, &armed_up));
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+
+	// ------------------------------------------------------------------
+	// The evidence expires: a switch that stops chattering is not punished
+	// for the rest of the session
+	// ------------------------------------------------------------------
+	reset_state(&manager);
+	manager.buttons[MOUSE_BUTTON_LEFT].deferArmedUntil = 5000;
+
+	MouseEvent stale_down = make_event(MOUSE_BUTTON_LEFT, 6000, true, 100, 100, 0);
+	MouseEvent stale_up = make_event(MOUSE_BUTTON_LEFT, 6400, false, 140, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &stale_down));
+	CHECK(!debounce_process_event(&manager, &stale_up));
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 
 	// ------------------------------------------------------------------
 	// A short press that moved is a flick, not a drag: released at once
@@ -294,15 +405,36 @@ void test_smart_drag_run(void)
 	// ------------------------------------------------------------------
 	// Smart Drag tuning: defaults, accepted values and rejected values
 	// ------------------------------------------------------------------
-	CHECK(manager.releaseDelayMs == RELEASE_DELAY_DEFAULT_MS);
 	CHECK(manager.dragHoldTimeMs == DRAG_HOLD_TIME_DEFAULT_MS);
 	CHECK(manager.dragDistancePx == DRAG_DISTANCE_DEFAULT_PX);
 
-	// The delay is time the system spends still believing the button is down, so
-	// the default has to stay short and has to be offered in the menu as is:
-	// otherwise the smallest thing a user can pick is worse than the default.
-	CHECK(RELEASE_DELAY_DEFAULT_MS == 20);
-	CHECK(config_release_delay_presets()[0] == RELEASE_DELAY_DEFAULT_MS);
+	// A fresh manager starts at the shipped default, and that default is zero:
+	// a release is never held back unless the user asks for it.
+	{
+		DebounceManager fresh;
+		debounce_init(&fresh);
+		CHECK(fresh.releaseDelayMs == RELEASE_DELAY_DEFAULT_MS);
+		CHECK(RELEASE_DELAY_DEFAULT_MS == 0);
+		CHECK(config_release_delay_presets()[0] == RELEASE_DELAY_DEFAULT_MS);
+		debounce_cleanup(&fresh);
+	}
+
+	// Zero is not "hold for no time", it is "never hold": a drag release has to
+	// go through on the frame it happened.
+	reset_state(&manager);
+	debounce_set_release_delay(&manager, 0, RELEASE_DELAY_MIN_MS, RELEASE_DELAY_MAX_MS);
+	CHECK(manager.releaseDelayMs == 0);
+
+	MouseEvent holdoff_down = make_event(MOUSE_BUTTON_LEFT, 17000, true, 100, 100, 0);
+	MouseEvent holdoff_up = make_event(MOUSE_BUTTON_LEFT, 17700, false, 340, 100, 0);
+
+	CHECK(!debounce_process_event(&manager, &holdoff_down));
+	CHECK(!debounce_process_event(&manager, &holdoff_up));
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
+	CHECK(!debounce_has_pending_deferrals(&manager));
+
+	// Put the hold back for the blocks that are about it
+	debounce_set_release_delay(&manager, 20, RELEASE_DELAY_MIN_MS, RELEASE_DELAY_MAX_MS);
 
 	debounce_set_release_delay(&manager, 80, RELEASE_DELAY_MIN_MS, RELEASE_DELAY_MAX_MS);
 	CHECK(manager.releaseDelayMs == 80);
@@ -341,7 +473,7 @@ void test_smart_drag_run(void)
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 
 	// ------------------------------------------------------------------
-	// A queued replay is dropped when the user lets go before it runs
+	// A press inside the release window is chatter, not a click
 	// ------------------------------------------------------------------
 	reset_state(&manager);
 	debounce_set_defer_available(&manager, true);
@@ -354,14 +486,22 @@ void test_smart_drag_run(void)
 	CHECK(debounce_process_event(&manager, &replay_up));
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 
+	// Blocked, and the release is still owed to the system
 	CHECK(debounce_process_event(&manager, &replay_press));
-	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
-
-	// The release arrives before the timer ever ran. Replaying the press now
-	// would leave the button held with nothing left to release it.
-	MouseEvent replay_release = make_event(MOUSE_BUTTON_LEFT, 20350, false, 100, 100, 0);
-	debounce_process_event(&manager, &replay_release);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
+
+	// Its own release is a stray one and delays nothing
+	MouseEvent replay_release = make_event(MOUSE_BUTTON_LEFT, 20350, false, 100, 100, 0);
+	CHECK(!debounce_process_event(&manager, &replay_release));
+	CHECK(debounce_has_pending_work(&manager));
+
+	// The timer delivers that release and nothing else
+	g_injected_count = 0;
+	manager.buttons[MOUSE_BUTTON_LEFT].deferStartTime = GetTickCount64() - 1000;
+	debounce_check_deferred_releases(&manager);
+	CHECK(g_injected_count == 1);
+	CHECK(g_injected[0].mi.dwFlags == MOUSEEVENTF_LEFTUP);
 	CHECK(!debounce_has_pending_work(&manager));
 
 	// ------------------------------------------------------------------
@@ -381,12 +521,12 @@ void test_smart_drag_run(void)
 	debounce_set_defer_available(&manager, true);
 
 	// ------------------------------------------------------------------
-	// The replay itself: what actually reaches the system, and in what order
+	// Nothing that follows a held release may press the button again
 	// ------------------------------------------------------------------
 	reset_state(&manager);
 	g_injected_count = 0;
 
-	// Long and moved, so this release is held back and there is something to replay
+	// Long and moved, so this release is held back
 	MouseEvent replay2_down = make_event(MOUSE_BUTTON_LEFT, 22000, true, 300, 200, 0);
 	MouseEvent replay2_up = make_event(MOUSE_BUTTON_LEFT, 22300, false, 340, 200, 0);
 	MouseEvent replay2_press = make_event(MOUSE_BUTTON_LEFT, 22340, true, 305, 205, 0);
@@ -398,29 +538,19 @@ void test_smart_drag_run(void)
 	// The press is swallowed here and stays swallowed: nothing may be injected
 	// from this stack, it is the one the hook callback runs on.
 	CHECK(debounce_process_event(&manager, &replay2_press));
-	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
 	CHECK(g_injected_count == 0);
 
-	debounce_service_replay(&manager);
+	// The timer owes one UP. A DOWN here is what kept a window following the
+	// pointer after the user had already let go.
+	g_injected_count = 0;
+	manager.buttons[MOUSE_BUTTON_LEFT].deferStartTime = GetTickCount64() - 1000;
+	debounce_check_deferred_releases(&manager);
 
-	// One call carrying two events: the held release first, the press second
-	CHECK(g_injected_count == 2);
+	CHECK(g_injected_count == 1);
 	CHECK(g_injected[0].mi.dwFlags == MOUSEEVENTF_LEFTUP);
-	CHECK(g_injected[1].mi.dwFlags == (MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE));
-	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
 	CHECK(!debounce_has_pending_work(&manager));
 	CHECK(debounce_injection_failures() == 0);
 	CHECK(debounce_injection_refusals() == 0);
-
-	// The press has to land where it happened. Somewhere else would make the
-	// next release look like a drag and defer a plain click.
-	int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-	int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-	int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-	int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-
-	CHECK(g_injected[1].mi.dx == MulDiv(305 - vx, 65535, vw - 1));
-	CHECK(g_injected[1].mi.dy == MulDiv(205 - vy, 65535, vh - 1));
 
 	debounce_flush_deferred_releases(&manager);
 

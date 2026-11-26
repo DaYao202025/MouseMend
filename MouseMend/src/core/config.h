@@ -29,13 +29,24 @@ typedef enum
 // Smart Drag Protection: delay applied to a deferred release
 #define RELEASE_DELAY_MIN_MS 0
 #define RELEASE_DELAY_MAX_MS 200
-// Short on purpose. The release is held back to outlast a chattering switch,
-// and while it is held the system still thinks the button is down - so every
-// millisecond here is a millisecond of window drag or text selection that the
-// user did not ask for. Twenty is already longer than a bounce and short enough
-// to be lost between two frames.
-#define RELEASE_DELAY_DEFAULT_MS 20
-#define RELEASE_DELAY_PRESET_COUNT 3
+
+// Zero means the release is never held back, and it is the default.
+//
+// While a release is held the system still believes the button is down, so
+// every millisecond here is a millisecond of window drag or text selection the
+// user did not ask for. Measured on a switch that chatters at the moment of
+// release, the hold cost 22-79 ms on every single drag - the "it sticks to the
+// pointer" complaint - and bought nothing, because that chatter happens after
+// the release rather than during the drag the hold exists to protect.
+//
+// It also cannot be made short enough to be invisible: the delivery rides on
+// WM_TIMER, which is a low priority message and starves while the pointer is
+// moving. So the cost is either paid in full or not paid at all.
+//
+// 20 / 40 / 80 stay on the menu for the switch that really does chatter in the
+// middle of a drag.
+#define RELEASE_DELAY_DEFAULT_MS 0
+#define RELEASE_DELAY_PRESET_COUNT 4
 
 // Smart Drag Protection: movement (in pixels) above which a press counts as a drag
 #define DRAG_DISTANCE_MIN_PX 1

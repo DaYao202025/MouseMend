@@ -7,7 +7,7 @@ static const int WHEEL_THRESHOLD_PRESETS[THRESHOLD_PRESET_COUNT] = {20, 30, 35};
 // Quick-pick values for the Smart Drag Protection tuning
 // The delay list starts where the default is, so the smallest step is also the
 // least intrusive one; only a switch that really does chatter needs 40 or 80.
-static const int RELEASE_DELAY_PRESETS[RELEASE_DELAY_PRESET_COUNT] = {20, 40, 80};
+static const int RELEASE_DELAY_PRESETS[RELEASE_DELAY_PRESET_COUNT] = {0, 20, 40, 80};
 static const int DRAG_DISTANCE_PRESETS[DRAG_DISTANCE_PRESET_COUNT] = {3, 5, 10};
 
 // Preset definitions

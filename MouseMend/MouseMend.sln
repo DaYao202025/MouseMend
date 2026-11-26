@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MouseMend", "MouseMend.vcxp
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MouseMendTests", "tests\MouseMendTests.vcxproj", "{C4E1A7B2-3F5D-4A18-9E6B-7D2C8A4F1B93}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "MouseMendTrace", "tools\MouseMendTrace\MouseMendTrace.vcxproj", "{C4E1B2A7-6D3F-4A58-9B21-7F0C5D8E4A13}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -31,6 +33,14 @@ Global
 		{C4E1A7B2-3F5D-4A18-9E6B-7D2C8A4F1B93}.Release|x64.Build.0 = Release|x64
 		{C4E1A7B2-3F5D-4A18-9E6B-7D2C8A4F1B93}.Release|x86.ActiveCfg = Release|Win32
 		{C4E1A7B2-3F5D-4A18-9E6B-7D2C8A4F1B93}.Release|x86.Build.0 = Release|Win32
+		{C4E1B2A7-6D3F-4A58-9B21-7F0C5D8E4A13}.Debug|x64.ActiveCfg = Debug|x64
+		{C4E1B2A7-6D3F-4A58-9B21-7F0C5D8E4A13}.Debug|x64.Build.0 = Debug|x64
+		{C4E1B2A7-6D3F-4A58-9B21-7F0C5D8E4A13}.Debug|x86.ActiveCfg = Debug|Win32
+		{C4E1B2A7-6D3F-4A58-9B21-7F0C5D8E4A13}.Debug|x86.Build.0 = Debug|Win32
+		{C4E1B2A7-6D3F-4A58-9B21-7F0C5D8E4A13}.Release|x64.ActiveCfg = Release|x64
+		{C4E1B2A7-6D3F-4A58-9B21-7F0C5D8E4A13}.Release|x64.Build.0 = Release|x64
+		{C4E1B2A7-6D3F-4A58-9B21-7F0C5D8E4A13}.Release|x86.ActiveCfg = Release|Win32
+		{C4E1B2A7-6D3F-4A58-9B21-7F0C5D8E4A13}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

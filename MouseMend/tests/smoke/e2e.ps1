@@ -150,7 +150,7 @@ Check 'Btn1_Threshold (right preset)' $settings.Btn1_Threshold 40
 Check 'Btn0_Threshold (left untouched)' $settings.Btn0_Threshold 50
 
 # 3. Smart Drag tuning must persist
-Send-Command ($IDM_RELEASE_DELAY_BASE + 2)
+Send-Command ($IDM_RELEASE_DELAY_BASE + 3)
 Send-Command ($IDM_DRAG_DISTANCE_BASE + 2)
 $settings = Get-ItemProperty -Path $regPath
 Check 'ReleaseDelay (third preset)' $settings.ReleaseDelay 80
@@ -171,7 +171,7 @@ else {
 
     $settings = Get-ItemProperty -Path $regPath
     # Mirrors RELEASE_DELAY_DEFAULT_MS in src/core/config.h
-    Check 'ReleaseDelay restored' $settings.ReleaseDelay 20
+    Check 'ReleaseDelay restored' $settings.ReleaseDelay 0
     Check 'DragDistance restored' $settings.DragDistance 5
     Check 'Btn1_Threshold restored' $settings.Btn1_Threshold 50
     Check 'Btn0_Enabled still on' $settings.Btn0_Enabled 1

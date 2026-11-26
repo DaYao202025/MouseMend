@@ -17,6 +17,15 @@
 // ignored by Windows anyway.
 #define DEBOUNCE_BLOCK_TIMEOUT_MS 2000u
 
+// How long a demonstrated bounce keeps the release deferral armed, in ms.
+//
+// One rejected press is enough to know the switch can chatter, and a chattering
+// switch stays chattering: a worn contact does not heal between clicks. A minute
+// is long enough to cover a burst of dragging on the same failing button and
+// short enough that a mouse replaced mid-session is not penalised for the rest
+// of the day.
+#define DEBOUNCE_CHATTER_ARM_MS 60000u
+
 // Debounce configuration for a single button
 // Aligned to a cache line so that per-button updates never share a cache line.
 typedef struct
@@ -27,6 +36,19 @@ typedef struct
 	uint64_t pressGapMs;	 // Gap between the last two presses (diagnostics only)
 	uint64_t blockedTime;	 // Timestamp of the press that is waiting for its release
 	uint64_t deferStartTime; // Timestamp when release deferral started
+
+	// Until when a release of this button may be held back.
+	//
+	// Holding a release means the system still believes the button is down, so
+	// whatever the pointer does in the meantime is a drag. That is the right
+	// trade while a switch is chattering and the wrong one for every other
+	// mouse: a healthy switch gains nothing from it and pays a release that
+	// arrives late, every single drag.
+	//
+	// So it is armed by evidence, not by configuration: only a press the
+	// threshold had to reject - a real bounce - arms it. A clean mouse never
+	// arms it and therefore never has a release delayed at all.
+	uint64_t deferArmedUntil;
 	POINT downPoint;		 // Coordinates when the button was pressed
 	POINT deferUpPoint;		 // Coordinates where the release happened
 	uint32_t thresholdMs;	 // Debounce threshold in milliseconds
@@ -36,6 +58,16 @@ typedef struct
 	bool isBlocked;			 // Whether the next event should be blocked
 	bool isDeferringRelease; // Whether we are waiting to confirm a release
 	bool hasPressGap;		 // Whether pressGapMs is valid (diagnostics only)
+
+	// What the system currently believes about this button.
+	//
+	// The heuristics are allowed to be wrong about a single event; this one is
+	// not. A release dropped while the system thinks the button is down leaves
+	// the pointer dragging a window (or growing a selection) until the user
+	// clicks again - the exact "it sticks to the pointer" complaint. So the
+	// release decisions consult it, and anything that delivers a press or a
+	// release keeps it true to what Windows has actually received.
+	bool system_down;
 
 	// Replay: a press that arrived while a release was still held back is
 	// swallowed and re-injected by the timer together with that release.

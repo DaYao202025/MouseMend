@@ -1,4 +1,5 @@
 #include "mouse_hook.h"
+#include "../utils/trace_log.h"
 #include <stdint.h>
 #include <windows.h>
 
@@ -24,6 +25,11 @@ static LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lPara
 		// Count every event, movement included, so the watchdog can tell a live
 		// hook from a removed one even when the user only moves the mouse.
 		InterlockedIncrement(&manager->event_count);
+
+		// Recorded here rather than in the callback: movement never reaches it,
+		// and a trail is what tells a stuck drag apart from a normal one.
+		if (wParam == WM_MOUSEMOVE)
+			trace_move(((PMSLLHOOKSTRUCT)lParam)->pt.x, ((PMSLLHOOKSTRUCT)lParam)->pt.y);
 
 		if (wParam != WM_MOUSEMOVE && manager->callback)
 		{
@@ -108,6 +114,7 @@ bool mouse_hook_install(MouseHookManager *manager)
 		return false;
 
 	manager->installed = true;
+	trace_lifecycle(TRACE_LIFE_HOOK_INSTALL);
 	return true;
 }
 
@@ -125,6 +132,7 @@ void mouse_hook_uninstall(MouseHookManager *manager)
 
 	manager->installed = false;
 	g_manager = NULL;
+	trace_lifecycle(TRACE_LIFE_HOOK_REMOVE);
 }
 
 // Get button from WPARAM and MSLLHOOKSTRUCT

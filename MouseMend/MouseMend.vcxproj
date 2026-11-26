@@ -176,6 +176,7 @@
     <ClCompile Include="src\utils\diagnostics.c" />
     <ClCompile Include="src\utils\logger.c" />
     <ClCompile Include="src\utils\support_bundle.c" />
+  <ClCompile Include="src\utils\trace_log.c" />
     <ClCompile Include="src\utils\hang_watchdog.c" />
     <ClCompile Include="src\utils\zip_writer.c" />
   </ItemGroup>
@@ -209,6 +210,7 @@
     <ClInclude Include="src\utils\diagnostics.h" />
     <ClInclude Include="src\utils\logger.h" />
     <ClInclude Include="src\utils\support_bundle.h" />
+  <ClInclude Include="src\utils\trace_log.h" />
     <ClInclude Include="src\utils\hang_watchdog.h" />
     <ClInclude Include="src\utils\zip_writer.h" />
   </ItemGroup>

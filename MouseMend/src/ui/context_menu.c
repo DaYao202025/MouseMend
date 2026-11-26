@@ -123,7 +123,9 @@ static void AddTuningItems(HMENU hMenu, const int *values, int count, uint32_t c
 		if (current == (uint32_t)values[i])
 			flags |= MF_CHECKED;
 
-		const wchar_t *label = use_px ? lang_format_px(values[i]) : lang_format_ms(values[i]);
+		// Zero is not "0 ms", it is the setting that turns the behaviour off
+		const wchar_t *label = use_px ? lang_format_px(values[i])
+								 : (values[i] == 0 ? lang_str(STR_TUNING_OFF) : lang_format_ms(values[i]));
 		InsertMenuW(hMenu, -1, flags, base_id + (UINT)i, label);
 	}
 }

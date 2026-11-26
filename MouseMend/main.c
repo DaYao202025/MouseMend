@@ -42,6 +42,7 @@
 #include "src/utils/hang_watchdog.h"
 #include "src/utils/crash_dump.h"
 #include "src/utils/diagnostics.h"
+#include "src/utils/trace_log.h"
 #include "src/utils/logger.h"
 #include "src/utils/support_bundle.h"
 
@@ -216,6 +217,7 @@ static void EnsureSmartDragTimer(void)
 	{
 		g_app.deferred_timer_armed = true;
 		debounce_set_defer_available(&g_app.debounce, true);
+		trace_lifecycle(TRACE_LIFE_TIMER_ARM);
 		return;
 	}
 
@@ -228,11 +230,29 @@ static LRESULT CALLBACK OnMouseHookCallback(const MouseEvent *event, void *user_
 {
 	AppState *app = (AppState *)user_data;
 
+	// A release can be held back, and only a running timer can give it back.
+	//
+	// The timer stops itself when it has nothing to do, so a press from two
+	// seconds ago is no promise that one is alive now. Without it the engine
+	// still believes the release will be delivered, swallows it, and the system
+	// keeps the button down - a window then follows the pointer after the user
+	// has let go, until the next click clears the state. Arming here, before the
+	// verdict is reached, keeps "may defer" and "a timer exists" the same fact.
+	// SetTimer from a hook callback is a plain kernel call, unlike SendInput.
+	if (!event->is_down && !event->is_injected && app->debounce.use_hybrid_heuristic)
+		EnsureSmartDragTimer();
+
 	// Process event directly - avoid creating intermediate structure
 	// The explanation is kept because the check-up window renders the engine's
 	// own verdict instead of repeating the rules somewhere else.
 	DebounceDecision decision;
 	bool blocked = debounce_process_event_ex(&app->debounce, event, &decision);
+
+	// Trace build only: what arrived, what was decided, and what Windows thinks
+	// about the button a moment later. That last part is the whole point - it is
+	// the difference between "we let it through" and "the system saw it".
+	trace_button(event->button, event->is_down, event->is_injected, event->x, event->y,
+				 debounce_reason_slug(decision.reason), blocked, decision.replay);
 
 	// Record the decision for the check-up window. Memory only: the hook has to
 	// return within its budget or Windows silently removes it.
@@ -900,6 +920,10 @@ static void ShutdownApp(void)
 		g_app.debounce_ready = false;
 	}
 
+	// Last, so everything above still lands in the file
+	trace_lifecycle(TRACE_LIFE_APP_STOP);
+	trace_stop();
+
 #ifndef NDEBUG
 	LOG_INFO(&g_app.logger, "Application shutdown complete");
 	logger_cleanup(&g_app.logger);
@@ -1423,6 +1447,13 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 			{
 				KillTimer(hWnd, TIMER_DEFERRED_RELEASE);
 				g_app.deferred_timer_armed = false;
+
+				// "Can defer" and "a timer is running" have to be one fact. Leaving
+				// this true while the timer is gone is what let a release be held
+				// with nothing left to deliver it: the engine deferred, the system
+				// kept the button down, and the pointer dragged a window with it.
+				debounce_set_defer_available(&g_app.debounce, false);
+				trace_lifecycle(TRACE_LIFE_TIMER_STOP);
 			}
 		}
 		else if (wParam == TIMER_WATCHDOG && g_app.hook_ready)
@@ -1831,6 +1862,10 @@ int CALLBACK wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 	if (CommandLineHasSwitch(lpCmdLine, L"--diagnose"))
 		return diagnostics_run();
 
+	// Trace build only. The switch is parsed in every build, but the tracing it
+	// turns on compiles to nothing unless MOUSEMEND_TRACE was defined.
+	bool trace_requested = CommandLineHasSwitch(lpCmdLine, L"--trace");
+
 	// A dump is the only way to turn a user's "it closed itself" into a stack.
 	// Installed before anything can fail, and it changes nothing the user sees.
 	// The collector is registered first, so even a crash during start-up produces
@@ -1872,6 +1907,9 @@ int CALLBACK wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance
 		CloseHandle(g_app.mutex);
 		return EXIT_SUCCESS;
 	}
+
+	if (trace_requested && trace_start())
+		trace_lifecycle(TRACE_LIFE_APP_START);
 
 	g_app.hInstance = hInstance;
 

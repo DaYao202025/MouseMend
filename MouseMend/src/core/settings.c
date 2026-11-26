@@ -64,14 +64,14 @@ bool settings_load(DebounceManager *debounce, Preferences *prefs)
 
 	if (read_dword(hKey, L"ReleaseDelay", &value))
 	{
-		// 50 was the default until 2.2.2 and every save wrote all values out, so a
-		// stored 50 says nothing about intent - it is what the old build put there
-		// on its first save. It is also the value that made a dragged window keep
-		// following the cursor for another 50 ms after the release, which is
-		// exactly what 2.2.2 was released to stop. Treat it as "never chosen" and
-		// start from the new default; 40 and 80 are left alone, they can only be
-		// a deliberate choice.
-		if (value == 50)
+		// 50 and 20 were the defaults before this build, and every save wrote all
+		// values out, so a stored one of those says nothing about intent - it is
+		// what the old build put there on its first save. Both were also long
+		// enough to leave a dragged window following the cursor after the release,
+		// which is the complaint the default of 0 answers. Treat them as "never
+		// chosen" and start from the current default; 40 and 80 are left alone,
+		// they can only be a deliberate choice.
+		if (value == 50 || value == 20)
 			value = RELEASE_DELAY_DEFAULT_MS;
 
 		debounce_set_release_delay(debounce, value, RELEASE_DELAY_MIN_MS, RELEASE_DELAY_MAX_MS);

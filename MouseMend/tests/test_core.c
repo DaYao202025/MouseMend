@@ -901,10 +901,16 @@ static void test_debounce_decision(void)
 	CHECK(!debounce_process_event_ex(&manager, &switched_off, &decision));
 	CHECK(decision.reason == DEBOUNCE_REASON_IGNORE_UNMONITORED);
 
-	// Smart Drag: a press that was long and moved is a drag, its release is held
-	// back, and the press that follows delivers it before it is judged - that
-	// press is a real user action and must never be reported as a bounce.
+	// Smart Drag: a press that was long and moved is a drag, so its release is
+	// held back - but only when the user has switched the hold on. Zero, the
+	// shipped default, never holds anything.
 	debounce_set_hybrid_heuristic(&manager, true);
+	debounce_set_release_delay(&manager, 20, RELEASE_DELAY_MIN_MS, RELEASE_DELAY_MAX_MS);
+
+	// A release is only ever held back on a switch that has already chattered:
+	// the arming path itself is covered in test_smart_drag.c. Here the point is
+	// what the verdict looks like once it is armed.
+	manager.buttons[MOUSE_BUTTON_LEFT].deferArmedUntil = 100000; // beyond every stamp below
 
 	MouseEvent hold_down = {0};
 	hold_down.button = MOUSE_BUTTON_LEFT;
@@ -932,19 +938,18 @@ static void test_debounce_decision(void)
 	next_press.x = 10;
 	next_press.y = 10;
 
-	// The press is swallowed and replayed by the timer, not passed through: the
-	// release it was held behind has to reach the system first, and injecting it
-	// from inside the hook callback is what used to deadlock the whole process.
+	// A press 40 ms after the release is the switch chattering. It is blocked,
+	// and the held release stays queued: the timer still owes the system that
+	// UP. Replaying the press (UP then DOWN) pressed the button again on the
+	// user's behalf and left the pointer dragging a window when the release that
+	// would have lifted it never came.
 	CHECK(debounce_process_event_ex(&manager, &next_press, &decision));
-	CHECK(decision.reason == DEBOUNCE_REASON_PASS_FLUSHED);
-	CHECK(decision.flushed_deferred);
-	CHECK(decision.replay);
-
-	// Still not a false click: the counters, the block log and the balloon all
-	// have to skip it, otherwise the user is told a click was blocked when it
-	// was only held back for a few milliseconds.
-	CHECK(!decision.blocked);
-	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
+	CHECK(decision.reason == DEBOUNCE_REASON_BLOCK_DEFERRING);
+	CHECK(decision.blocked);
+	CHECK(!decision.replay);
+	CHECK(!decision.flushed_deferred);
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 
 	// A long hold makes the two intervals diverge, and the log must show the
 	// press-to-press one rather than the engine's much smaller number. The engine

@@ -27,6 +27,7 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_BUTTON_TITLE_FMT] = L"%s (%s)",
 	[STR_ADVANCED] = L"Advanced",
 	[STR_RELEASE_DELAY] = L"Release Delay",
+	[STR_TUNING_OFF] = L"Off",
 	[STR_DRAG_DISTANCE] = L"Drag Distance",
 	[STR_NOTIFY_BLOCKS] = L"Show a balloon when a click is blocked",
 	[STR_NOTIFY_ON_TITLE_FMT] = L"MouseMend %s",
@@ -201,6 +202,15 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_VERSION_NOTES_TEXT] =
 		L"Only published versions are listed, newest first.\n"
 		L"\n"
+		L"2.3.0  Fixed the button sticking to the pointer. A release held back by\n"
+		L"       Smart Drag could be handed back together with a replay of the\n"
+		L"       press that followed it - and on a chattering switch that press IS\n"
+		L"       the chatter, so the button was pressed again on your behalf and\n"
+		L"       stayed down until the next click. The replay is gone, a held\n"
+		L"       release can no longer be lost, and the hold is off by default:\n"
+		L"       Advanced > Release Delay > Off. A mouse that never chatters now\n"
+		L"       never has a release delayed at all.\n"
+		L"\n"
 		L"2.2.2  Fixed the button feeling stuck. Smart Drag used to hold a release\n"
 		L"       back when the press was long *or* had moved, and while it was held\n"
 		L"       the system still thought the button was down - so moving the mouse\n"
@@ -267,6 +277,7 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_BUTTON_TITLE_FMT] = L"%s（%s）",
 	[STR_ADVANCED] = L"高级设置",
 	[STR_RELEASE_DELAY] = L"松手延迟",
+	[STR_TUNING_OFF] = L"关闭",
 	[STR_DRAG_DISTANCE] = L"拖拽距离",
 	[STR_NOTIFY_BLOCKS] = L"拦截时弹气泡提示我",
 	[STR_NOTIFY_ON_TITLE_FMT] = L"MouseMend %s",
@@ -434,6 +445,12 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_VERSION_NOTES_TITLE] = L"每个版本修了什么。",
 	[STR_VERSION_NOTES_TEXT] =
 		L"只列公开发布过的版本，新的在上面。\n"
+		L"\n"
+		L"2.3.0  修复「按键粘住鼠标」。智能拖拽扣住的松手，可能和紧随其后的按下\n"
+		L"       一起补发；对抖动的开关来说，那个按下就是抖动本身，等于替你重新\n"
+		L"       按住，直到再点一次才松开。现在重放已删除、被扣住的松手不会再丢，\n"
+		L"       并且扣留默认关闭（高级 → 松手延迟 → 关闭）。不抖的鼠标，松手\n"
+		L"       不会再被延迟哪怕一毫秒。\n"
 		L"\n"
 		L"2.2.2  修复左键粘连：智能拖拽原来只要「按得久」或「移动过」就扣住松手，\n"
 		L"       扣住期间系统仍认为按键是按下的，一动鼠标就拖窗口、拉选区。现在两个\n"
