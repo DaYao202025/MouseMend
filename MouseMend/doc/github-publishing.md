@@ -298,21 +298,26 @@ Invoke-WebRequest "https://purge.jsdelivr.net/gh/DaYao202025/MouseMend@main/Mous
 
 ---
 
-## 八、账号与权限（供参考，勿外传）
+## 八、账号与权限
 
-- GitHub 账号：`DaYao202025`
-- 凭证位置：Windows 凭证管理器，条目 `git:https://DaYao202025@github.com`（Visual Studio 写入）与 `GitHub for Visual Studio`
-- token 类型：`gho_` 开头的 OAuth token，scopes 含 `repo`，**能建仓库、能推代码**
-- 权限自检：
+- 发布使用 Visual Studio 写入的 GitHub 凭据，**本仓库不保存任何令牌**。
+- 具体条目名、令牌类型、权限范围**不写进文档**。这些对正常发布没有帮助，
+  但会告诉别人「去哪里找、找到之后能做什么」。早先版本记过这些内容，
+  已在本仓库的历史里，因此**凭据应当按已暴露处理并轮换**（见下）。
+- 需要确认凭据还有效时，只看调用是否成功，**不要把令牌或 scopes 写进任何文件**：
 
 ```powershell
 $raw = "protocol=https`nhost=github.com`n`n" | git credential fill
 $token = ($raw | Where-Object { $_ -match '^password=' }) -replace '^password=',''
-Invoke-WebRequest 'https://api.github.com/user' `
-  -Headers @{ Authorization = "Bearer $token"; 'User-Agent' = 'check' } |
-  Select-Object -ExpandProperty Headers | Select-Object 'X-OAuth-Scopes'
+if (-not $token) { 'no credential' }
+else {
+  (Invoke-WebRequest 'https://api.github.com/user' `
+    -Headers @{ Authorization = "Bearer $token"; 'User-Agent' = 'check' }).StatusCode
+}
 ```
 
+- **怀疑凭据泄露时，去 GitHub 设置里吊销并重新授权**，不要只改文档：
+  文档能改，已经发布出去的历史改不了。
 - **`gh` CLI 未安装**，也不需要安装——脚本只用 `git` + `Invoke-RestMethod`。
 
 ---
