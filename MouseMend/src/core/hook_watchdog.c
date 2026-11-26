@@ -10,7 +10,13 @@ void hook_watchdog_init(WatchdogState *state)
 	state->last_recover_tick = 0;
 	state->recover_count = 0;
 	state->suspect_streak = 0;
+	state->suspecting = false;
 	state->initialised = false;
+}
+
+bool hook_watchdog_is_healthy(const WatchdogState *state)
+{
+	return !state || !state->suspecting;
 }
 
 // Judge the health of the hook
@@ -42,12 +48,14 @@ WatchdogVerdict hook_watchdog_check(WatchdogState *state, bool cursor_moved, boo
 	if (events_advanced)
 	{
 		state->suspect_streak = 0;
+		state->suspecting = false;
 		return WATCHDOG_ALIVE;
 	}
 
 	// The cursor moved but nothing reached us. One such window can be a sampling
 	// artefact (the movement landed between the two reads), so require a streak.
 	state->suspect_streak++;
+	state->suspecting = true;
 
 	if (state->suspect_streak < WATCHDOG_SUSPECT_LIMIT)
 		return WATCHDOG_SUSPECT;

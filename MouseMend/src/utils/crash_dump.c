@@ -67,8 +67,8 @@ static bool write_dump_to(const wchar_t *directory, const EXCEPTION_POINTERS *in
 	// the field listed the input method's bundled dbghelp.dll, and the file it
 	// produced held a single thread. The system copy is the only one that
 	// understands the running build.
-	wchar_t system_directory[MAX_PATH];
-	wchar_t library_path[MAX_PATH];
+	wchar_t system_directory[SUPPORT_PATH_CHARS];
+	wchar_t library_path[SUPPORT_PATH_CHARS];
 	HMODULE library = NULL;
 
 	if (GetSystemDirectoryW(system_directory, ARRAYSIZE(system_directory)) > 0 &&
@@ -128,7 +128,7 @@ static void move_dump_next_to_log(const wchar_t *dump)
 	const wchar_t *name = wcsrchr(dump, L'\\');
 	name = (name && name[1]) ? name + 1 : dump;
 
-	wchar_t target[MAX_PATH];
+	wchar_t target[SUPPORT_PATH_CHARS];
 	if (FAILED(StringCchPrintfW(target, ARRAYSIZE(target), L"%s\\%s", directory, name)))
 		return;
 
@@ -145,10 +145,12 @@ static LONG WINAPI crash_dump_filter(EXCEPTION_POINTERS *info)
 	// The dump is staged in %TEMP% and only survives when the bundle cannot be
 	// written: the user asked for one file, and an empty Log folder appearing
 	// next to a program that never logs anything is just confusing.
-	wchar_t temp[MAX_PATH];
+	// Static: the exception filter may be running on a stack that is itself the
+	// reason for the crash. The re-entry guard makes these exclusive.
+	static wchar_t temp[SUPPORT_PATH_CHARS];
 	DWORD temp_length = GetTempPathW(ARRAYSIZE(temp), temp);
 
-	wchar_t dump[MAX_PATH];
+	static wchar_t dump[SUPPORT_PATH_CHARS];
 	dump[0] = L'\0';
 
 	bool have_dump = temp_length > 0 && temp_length < ARRAYSIZE(temp) &&
@@ -175,7 +177,7 @@ static LONG WINAPI crash_dump_filter(EXCEPTION_POINTERS *info)
 											&report.faulting_offset);
 		}
 
-		wchar_t bundle[MAX_PATH];
+		static wchar_t bundle[SUPPORT_PATH_CHARS];
 
 		if (support_bundle_write(&report, have_dump ? dump : NULL,
 								 bundle, ARRAYSIZE(bundle)))
@@ -219,7 +221,7 @@ bool crash_dump_write_current(wchar_t *path, size_t path_count)
 
 	path[0] = L'\0';
 
-	wchar_t temp[MAX_PATH];
+	wchar_t temp[SUPPORT_PATH_CHARS];
 	DWORD length = GetTempPathW(ARRAYSIZE(temp), temp);
 
 	if (length == 0 || length >= ARRAYSIZE(temp))

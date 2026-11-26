@@ -1,5 +1,6 @@
 #include "app_controller.h"
 #include "../ui/language.h"
+#include <strsafe.h>
 
 // Mark the state dirty
 // dirty_since = 0 restarts the countdown, so a slider that keeps moving postpones
@@ -193,6 +194,78 @@ void app_controller_set_log_blocks(AppController *controller, bool enabled)
 		return;
 
 	controller->prefs->log_blocks = enabled;
+
+	mark_dirty(controller);
+	notify(controller);
+}
+
+// Enable or disable the opt-in self-learning sampler
+void app_controller_set_learning(AppController *controller, bool enabled)
+{
+	if (!controller || !controller->prefs)
+		return;
+
+	controller->prefs->learning_enabled = enabled;
+
+	mark_dirty(controller);
+	notify(controller);
+}
+
+// Bind the context filter whose policy this controller now owns
+void app_controller_attach_context(AppController *controller, ContextFilter *filter)
+{
+	if (!controller)
+		return;
+
+	controller->context = filter;
+}
+
+void app_controller_set_context_mode(AppController *controller, ContextMode mode)
+{
+	if (!controller || !controller->context)
+		return;
+
+	context_filter_set_mode(controller->context, mode);
+
+	mark_dirty(controller);
+	notify(controller);
+}
+
+ContextAddResult app_controller_add_context_path(AppController *controller, ContextMode list,
+												 const wchar_t *full_path)
+{
+	if (!controller || !controller->context)
+		return CONTEXT_ADD_INVALID;
+
+	ContextAddResult result = context_filter_add_path(controller->context, list, full_path);
+	if (result != CONTEXT_ADD_OK)
+		return result;
+
+	mark_dirty(controller);
+	notify(controller);
+	return CONTEXT_ADD_OK;
+}
+
+bool app_controller_remove_context_path(AppController *controller, ContextMode list,
+										const wchar_t *full_path)
+{
+	if (!controller || !controller->context)
+		return false;
+
+	if (!context_filter_remove_path(controller->context, list, full_path))
+		return false;
+
+	mark_dirty(controller);
+	notify(controller);
+	return true;
+}
+
+void app_controller_reset_context(AppController *controller)
+{
+	if (!controller || !controller->context)
+		return;
+
+	context_filter_reset(controller->context);
 
 	mark_dirty(controller);
 	notify(controller);

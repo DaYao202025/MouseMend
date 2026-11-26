@@ -30,6 +30,12 @@ typedef struct
 	uint64_t last_recover_tick;
 	uint32_t recover_count;
 	int suspect_streak;
+
+	// Sticky health signal for the tray/menu. Unlike suspect_streak this is not
+	// cleared by an idle window: inactivity is no proof that a dead hook came
+	// back. Only an event the hook actually saw, or a fresh init after recovery,
+	// clears it.
+	bool suspecting;
 	bool initialised;
 } WatchdogState;
 
@@ -56,3 +62,9 @@ void hook_watchdog_init(WatchdogState *state);
 //   The verdict for this check
 WatchdogVerdict hook_watchdog_check(WatchdogState *state, bool cursor_moved, bool button_changed,
 									int64_t event_count, uint64_t now, uint64_t recover_cooldown_ms);
+
+// Whether the hook is known to be working. False from the first check that saw
+// input the hook missed, until either the hook reports an event again or the
+// state is reinitialised after a successful recovery. The tray uses this so it
+// never claims protection while Windows has silently removed the hook.
+bool hook_watchdog_is_healthy(const WatchdogState *state);

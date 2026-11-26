@@ -108,6 +108,14 @@ bool settings_load(DebounceManager *debounce, Preferences *prefs)
 		loaded = true;
 	}
 
+	if (read_dword(hKey, L"LearningEnabled", &value))
+	{
+		if (prefs)
+			prefs->learning_enabled = (value != 0);
+
+		loaded = true;
+	}
+
 	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
 	{
 		wchar_t value_name[SETTINGS_VALUE_NAME_SIZE];
@@ -156,6 +164,7 @@ bool settings_save(const DebounceManager *debounce, const Preferences *prefs)
 	success = write_dword(hKey, L"IntroShown", prefs->intro_shown ? 1 : 0) && success;
 	success = write_dword(hKey, L"NotifyBlocked", prefs->notify_blocks ? 1 : 0) && success;
 	success = write_dword(hKey, L"LogBlocked", prefs->log_blocks ? 1 : 0) && success;
+	success = write_dword(hKey, L"LearningEnabled", prefs->learning_enabled ? 1 : 0) && success;
 
 	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
 	{

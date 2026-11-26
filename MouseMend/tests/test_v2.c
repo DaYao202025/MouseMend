@@ -32,6 +32,7 @@ void test_hook_watchdog(void)
 	// First call only establishes a baseline
 	CHECK(hook_watchdog_check(&state, false, false, 0, 1000, cooldown) == WATCHDOG_FIRST_CHECK);
 	CHECK(state.initialised);
+	CHECK(hook_watchdog_is_healthy(&state));
 
 	// Mouse completely idle: nothing can be concluded, even with a frozen counter
 	CHECK(hook_watchdog_check(&state, false, false, 0, 4000, cooldown) == WATCHDOG_ALIVE);
@@ -39,13 +40,18 @@ void test_hook_watchdog(void)
 	// Cursor moved and the hook saw it: healthy
 	CHECK(hook_watchdog_check(&state, true, false, 5, 7000, cooldown) == WATCHDOG_ALIVE);
 	CHECK(state.suspect_streak == 0);
+	CHECK(hook_watchdog_is_healthy(&state));
 
-	// Cursor moved but the hook saw nothing: first suspicion
+	// Cursor moved but the hook saw nothing: first suspicion. The tray has to
+	// stop claiming protection from this point, not after the second sample.
 	CHECK(hook_watchdog_check(&state, true, false, 5, 10000, cooldown) == WATCHDOG_SUSPECT);
+	CHECK(!hook_watchdog_is_healthy(&state));
 
-	// An idle window in between must reset the streak
+	// An idle window in between must reset the streak, but silence is not proof
+	// that a dead hook came back - only an event from it can clear the flag.
 	CHECK(hook_watchdog_check(&state, false, false, 5, 11000, cooldown) == WATCHDOG_ALIVE);
 	CHECK(state.suspect_streak == 0);
+	CHECK(!hook_watchdog_is_healthy(&state));
 
 	// A click without cursor movement is evidence too (touchpad taps), so a dead
 	// hook must be caught even when the pointer never moves
@@ -73,13 +79,22 @@ void test_hook_watchdog(void)
 	// Events arriving again prove the recovery worked
 	CHECK(hook_watchdog_check(&state, true, false, 9, 47000, cooldown) == WATCHDOG_ALIVE);
 	CHECK(state.suspect_streak == 0);
+	CHECK(hook_watchdog_is_healthy(&state));
 
 	// A button press that the hook did see is equally healthy
 	CHECK(hook_watchdog_check(&state, false, true, 12, 50000, cooldown) == WATCHDOG_ALIVE);
 
 	// Degenerate input must not crash
 	CHECK(hook_watchdog_check(NULL, false, false, 0, 0, cooldown) == WATCHDOG_ALIVE);
+	CHECK(hook_watchdog_is_healthy(NULL));
 	hook_watchdog_init(NULL);
+
+	// A fresh init after recovery clears the flag even without another event
+	hook_watchdog_check(&state, true, false, 20, 51000, cooldown);
+	CHECK(hook_watchdog_check(&state, true, false, 20, 52000, cooldown) == WATCHDOG_SUSPECT);
+	CHECK(!hook_watchdog_is_healthy(&state));
+	hook_watchdog_init(&state);
+	CHECK(hook_watchdog_is_healthy(&state));
 }
 
 // ---------------------------------------------------------------------------

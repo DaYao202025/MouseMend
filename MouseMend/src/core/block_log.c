@@ -6,6 +6,9 @@
 // Number of 100 ns units in one millisecond
 #define LOG_FILETIME_UNITS_PER_MS 10000ULL
 
+// MAX_PATH is not enough for a Chinese account name in a deep profile folder.
+#define BLOCK_LOG_PATH_CHARS 1024
+
 // Initialize the queue
 bool block_log_init(BlockLogQueue *queue)
 {
@@ -225,7 +228,7 @@ bool block_log_resolve_directory(wchar_t *buffer, size_t buffer_count)
 
 	buffer[0] = L'\0';
 
-	wchar_t candidate[MAX_PATH];
+	wchar_t candidate[BLOCK_LOG_PATH_CHARS];
 
 	// Preferred location: next to the executable, so the user can find and delete it
 	DWORD length = GetModuleFileNameW(NULL, candidate, ARRAYSIZE(candidate));
@@ -236,7 +239,7 @@ bool block_log_resolve_directory(wchar_t *buffer, size_t buffer_count)
 		{
 			*last_separator = L'\0';
 
-			wchar_t directory[MAX_PATH];
+			wchar_t directory[BLOCK_LOG_PATH_CHARS];
 			if (SUCCEEDED(StringCchPrintfW(directory, ARRAYSIZE(directory), L"%s\\%s", candidate, BLOCK_LOG_DIR_NAME)) &&
 				ensure_directory(directory))
 			{
@@ -246,19 +249,19 @@ bool block_log_resolve_directory(wchar_t *buffer, size_t buffer_count)
 	}
 
 	// Fallback: the executable folder is read-only (Program Files, locked USB stick)
-	wchar_t local_app_data[MAX_PATH];
+	wchar_t local_app_data[BLOCK_LOG_PATH_CHARS];
 	DWORD env_length = GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data, ARRAYSIZE(local_app_data));
 	if (env_length == 0 || env_length >= ARRAYSIZE(local_app_data))
 		return false;
 
-	wchar_t base[MAX_PATH];
+	wchar_t base[BLOCK_LOG_PATH_CHARS];
 	if (FAILED(StringCchPrintfW(base, ARRAYSIZE(base), L"%s\\MouseMend", local_app_data)))
 		return false;
 
 	if (!ensure_directory(base))
 		return false;
 
-	wchar_t directory[MAX_PATH];
+	wchar_t directory[BLOCK_LOG_PATH_CHARS];
 	if (FAILED(StringCchPrintfW(directory, ARRAYSIZE(directory), L"%s\\%s", base, BLOCK_LOG_DIR_NAME)))
 		return false;
 
@@ -278,7 +281,7 @@ bool block_log_describe_directory(wchar_t *buffer, size_t buffer_count)
 
 	buffer[0] = L'\0';
 
-	wchar_t candidate[MAX_PATH];
+	wchar_t candidate[BLOCK_LOG_PATH_CHARS];
 	DWORD length = GetModuleFileNameW(NULL, candidate, ARRAYSIZE(candidate));
 
 	if (length > 0 && length < ARRAYSIZE(candidate))
@@ -291,7 +294,7 @@ bool block_log_describe_directory(wchar_t *buffer, size_t buffer_count)
 		}
 	}
 
-	wchar_t local_app_data[MAX_PATH];
+	wchar_t local_app_data[BLOCK_LOG_PATH_CHARS];
 	DWORD env_length = GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data, ARRAYSIZE(local_app_data));
 	if (env_length == 0 || env_length >= ARRAYSIZE(local_app_data))
 		return false;
@@ -331,7 +334,7 @@ size_t block_log_write_many(const wchar_t *directory, const SYSTEMTIME *base,
 
 			file = NULL;
 
-			wchar_t path[MAX_PATH];
+			wchar_t path[BLOCK_LOG_PATH_CHARS];
 
 			if (FAILED(StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\%s.log", directory, day)))
 				continue;

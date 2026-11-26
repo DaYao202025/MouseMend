@@ -16,6 +16,7 @@ typedef struct
 	bool intro_shown;	 // Whether the first-run balloon was already displayed
 	bool notify_blocks;	 // Show a balloon when a false click is blocked
 	bool log_blocks;	 // Append blocked clicks to Log\YYYYMMDD.log
+	bool learning_enabled; // Opt-in: collect chatter samples and offer suggestions
 } Preferences;
 
 // Load the persisted settings

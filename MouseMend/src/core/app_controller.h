@@ -5,6 +5,7 @@
 #include "config.h"
 #include "debouncer.h"
 #include "settings.h"
+#include "context_filter.h"
 
 // Single entry point for every state change.
 //
@@ -36,6 +37,7 @@ typedef struct
 {
 	DebounceManager *debounce; // Borrowed, owned by the application
 	Preferences *prefs;		   // Borrowed, owned by the application
+	ContextFilter *context;	   // Borrowed; may be NULL until attach_context
 
 	AppControllerSaveFn save;
 	void *save_user;
@@ -70,6 +72,16 @@ void app_controller_set_drag_distance(AppController *controller, uint32_t distan
 void app_controller_set_language(AppController *controller, Language language);
 void app_controller_set_notify_blocks(AppController *controller, bool enabled);
 void app_controller_set_log_blocks(AppController *controller, bool enabled);
+void app_controller_set_learning(AppController *controller, bool enabled);
+
+// Context policy. The filter is borrowed, not owned.
+void app_controller_attach_context(AppController *controller, ContextFilter *filter);
+void app_controller_set_context_mode(AppController *controller, ContextMode mode);
+ContextAddResult app_controller_add_context_path(AppController *controller, ContextMode list,
+												 const wchar_t *full_path);
+bool app_controller_remove_context_path(AppController *controller, ContextMode list,
+										const wchar_t *full_path);
+void app_controller_reset_context(AppController *controller);
 void app_controller_apply_preset(AppController *controller, const PresetConfig *preset);
 
 // Clear all counters and tell the owner so it can reset its own baselines

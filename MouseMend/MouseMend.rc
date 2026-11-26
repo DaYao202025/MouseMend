@@ -93,7 +93,22 @@ EXSTYLE WS_EX_APPWINDOW
 CAPTION ""
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
-    LTEXT           "", IDC_STATUS, 8, 6, 410, 13, SS_LEFT
+    // The status strip: one owner-draw control painting five blocks - the
+// overall verdict, then one per optional module. Idle they are squares with one
+// dim character; the block under the pointer widens until its caption fits.
+//
+// One control instead of five, because the animation changes widths on every
+// frame: five windows would mean five SetWindowPos calls per frame, and any
+// one-pixel disagreement between them reads as blocks that never quite line up.
+// Here all five are laid out inside a single client rectangle.
+//
+// y=5 h=11 to sit on the exact same baseline as the "version notes" button.
+// The remaining width up to that button is left to the strip: a caption expands
+// into it instead of moving its neighbours.
+// SS_NOTIFY is not decoration: without it a static returns HTTRANSPARENT to
+// WM_NCHITTEST, so the pointer falls through to the dialog and the control never
+// sees WM_MOUSEMOVE - which would leave every block permanently collapsed.
+CONTROL         "", IDC_STATUS, "Static", SS_OWNERDRAW | SS_NOTIFY, 8, 5, 396, 11
     PUSHBUTTON      "", IDC_VERSION_NOTES, 420, 5, 48, 11
     GROUPBOX        "", IDC_GROUP_TEST, 7, 21, 237, 272
     CONTROL         "", IDC_FILTER_AUTO, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 29, 44, 10

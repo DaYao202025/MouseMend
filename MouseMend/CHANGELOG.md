@@ -1,5 +1,187 @@
 # Changelog / 更新记录
 
+## 2.4.1 — 2026-11-26
+
+### 变更 / Changed
+
+- **状态行重做为「状态灯」色块条**：一个自绘控件里画五个无边框直角色块——主状态
+  「鼠标防护中 / 异常」，后面是 `钩` / `学` / `名` / `志`。五个块各有自己的色相
+  （绿 / 蓝 / 紫 / 橙 / 青），底色始终全亮度，收起时只显示一个 35% 白的单字；
+  鼠标移上去 100ms 线性向右展开成完整文字，其余保持正方形，移开后回到第一个块展开。
+  收起是瞬时的，所以展开过程中只有右边界在动。
+  The status row is now a strip of five square status-light blocks, one per
+  module, each with its own hue. The block under the pointer opens strictly to
+  the right in 100 ms, and the first block stays open at rest.
+
+### 修复 / Fixed
+
+- **自学习会把正常的快双击学成「该拦」**：原来把所有 64ms 内的按下都计入直方图，
+  一次 55ms 的正常双击（当前阈值 50ms，本来放行）会把建议推到 56，采纳后那批双击
+  开始被吞。现在只采**确实被拦下**的按下——用户丢了点击，才是需要调整的证据。
+  Self-learning now samples only presses that were actually blocked. Sampling
+  every fast press could advise raising the threshold until a working double
+  click started being swallowed.
+- **「采用建议」可以绕过 ±50% 限幅**：建议是提前算好缓存的，用户随后手动改阈值不会
+  触发重算，于是一条按 100ms 算出的建议能被套到 5ms 的阈值上。现在采用时按当前阈值
+  重新限幅。
+  The ±50% guard is re-applied at adoption time against the threshold in force
+  now, not the one that was in force when the advice was computed.
+- **「采用」会悄悄改掉菜单里看不见的 X1 / X2 侧键**：现在只作用于菜单显示的三个键。
+- **建议等于当前阈值时仍然可点**：点下去什么都不变，样本却被清零，还提示「已采用」。
+  这种情况现在不再产生建议。
+- **迁移来的旧排除规则重启后消失**：迁移只改了内存、没有落盘，而「已迁移」标记已经
+  写死，用户下次启动名单和模式双双丢失。现在迁移后立即保存。
+  Migrated rules were written to memory only; they are now persisted immediately.
+- **白名单为空时切到白名单模式会静默关闭全部过滤**：现在先弹确认，说明后果。
+- **名单已满仍可点「添加程序…」**：现在满 16 个时该项直接置灰，不用先找 exe 再被告知。
+- **名单子菜单的单选勾按「只要不是全部程序」显示**：白名单生效时，黑名单子菜单标题
+  写着「未启用」，里面的单选却是选中的。现在按本名单是否为当前模式显示。
+- **添加成功的提示不带程序名**：现在提示「已把 chrome.exe 添加到黑名单」。
+- **添加规则后 400ms 才落盘**：这个防抖是给滑块拖动用的，菜单动作丢了不划算。
+  现在与删除一致，立即写盘。
+
+### 验证 / Verified
+
+四配置 Rebuild（含 `/analyze`）0 error 0 warning；单测 x64 / x86 **3336 / 0**；
+`audit_printf.py` 全部调用点 0 问题；`e2e` / `diagnose` / `stuck_key` 各 0 failure。
+
+## 2.4.0 — 2026-11-26
+
+### 新增 / Added
+
+- **自学习阈值（默认关闭，只给建议不自动修改）** —— 打开后，程序统计每个按键
+  「被阈值判为抖动」时的真实间隔，用 P80 分位数给出建议值。建议要用户从托盘菜单里
+  点「采用全部学习建议」才会写进阈值，且限制在当前值的 ±50% 以内、1–200 ms。
+  采样与判定同源（都用 `elapsed_ms`），所以在钩子里只做两次原子自增，不查盘、不加锁。
+  **It never changes a threshold on its own; suggestions need one explicit click.**
+- **排除指定程序 / 临时暂停** —— 托盘 → 高级 → 「排除当前程序」把最近一次的前台程序
+  加入排除表，之后在该程序里完全不去抖；规则写进注册表，重启后保留。
+  「暂停过滤 5 分钟」是临时动作，退出即失效。前台程序名由一条 2 秒轮询的后台线程解析
+  （`OpenProcess` 只在后台线程），钩子里只读一个原子整数。
+- 托盘菜单新增学习建议与样本数显示；「排除当前程序」与「暂停过滤」同样在高级子菜单。
+
+### 变更 / Changed
+
+- 引擎新增 `debounce_process_event_ex_suppressed()`：被排除/暂停时事件仍然完整走一遍判定，
+  只是所有拦截都变成放行，`system_down` / `isBlocked` 与实际送达系统的事件保持一致。
+  原 `debounce_process_event_ex()` 行为不变。
+- **托盘一级菜单重排**：「开机自启」移进「高级」，原位置换成三个母菜单
+  **自学习 / 白名单 / 黑名单**，一级只多两行。三个子菜单里都能看到当前状态与已添加的程序。
+- **白名单与黑名单互斥**（三选一）：全部拦截 / 只在白名单程序里拦截 / 黑名单程序不拦截。
+  用单一枚举而不是两个开关，从数据结构上排除「两个都开」的矛盾状态。
+  Whitelist and blacklist are mutually exclusive modes; a single enum makes the
+  contradictory "both on" state impossible to represent.
+- **添加程序走系统文件选择框**，记录完整路径；本程序自身不能被添加；同一程序不能同时
+  出现在两个名单；名单上限 16 个。
+- **系统进程不会被误加**：`csrss.exe` / `lsass.exe` / `winlogon.exe` 这类永远不会出现在前台的
+  进程会被直接拒绝并说明原因；`explorer.exe` / `ApplicationFrameHost.exe` 等外壳与 UWP 宿主
+  允许添加，但会先提示「一条规则影响一整片场景」。
+  Processes that can never own a foreground window are refused; shell and UWP
+  hosts are allowed after a warning about how much one rule covers.
+- 旧版本的「排除列表」（`ExcludedExes`，纯文件名）在首次启动时**自动迁移**为黑名单规则
+  （`*\explorer.exe` 形式），原有排除行为保持不变；迁移只执行一次，旧键保留以便回退。
+- 顺带清理：补上 `trace_log.c/.h` 在工程 filters 里的历史缺口。
+
+### 重构 / Refactored
+
+- **`WM_COMMAND` 从 305 行一条链拆成四个处理函数**（菜单 / 按键参数 / 名单 / 学习），
+  由一个新增的纯逻辑分类器按 ID 空间分组。区间判定原先散在这条链的中段，现在集中在一处，
+  且每条区间都带上界——不带上界会把所有更大的 ID 吸进同一组，然后被解码函数静默拒绝。
+  新增菜单项从此只改一个函数，不再需要在 305 行里找位置。
+  `WM_COMMAND` was a single 305-line chain covering four unrelated features; it is now
+  four handlers behind a pure classifier.
+- **自学习子菜单收窄为 3 列**：`键名 / 当前→建议 / 样本数`。去掉单位文字与保持时长，
+  但**保留建议值本身**——打开这个子菜单只问一件事「该不该点采用」，没有建议值就无法判断。
+- **自学习模块不再认识引擎**：启动时收一个阈值回调，不再持有 `DebounceManager *`。
+  引擎改字段名时学习模块不用动，也不会因为调了加锁接口而与钩子线程抢锁。
+- **新增能力健康自检**：钩子 / 学习 / 名单 / 日志四项各判「关闭 / 正常 / 尚未观测 / 停摆」，
+  原先只有一个「防护正常」，模块在背后静默死掉时照样显示正常——这一行就是为了让那种状态
+  变成可见事实。
+- **状态行改为「状态灯」色块条**：一个 `SS_OWNERDRAW` 控件里画五个无边框直角色块，
+  最左是主状态，右边依次是 `钩` / `学` / `名` / `志`。高度与右侧「版本说明」按钮一致
+  （`y=5 h=11`），没有圆角也没有描边。
+  - **静止**：五个正方形。底色只有 20% 亮度（灯灭），方块里一个字用 45% 白——淡到不
+    抢眼，但看得出是哪一块。
+  - **悬停**：那一块宽度与亮度一起渐变，展开到放得下完整文字（`钩子 正常`），其余四块
+    收回正方形；移开全部收起。
+  - **动画**：宽度和亮度都是「每帧走完剩余距离的 14%」，不是定时插值。指针快速划过时
+    从当前位置改道，既不重启动画也不抖动；2 px 的块间隙不属于任何人，扫过时自然收起。
+  - 主块文字随状态变：`鼠标防护中`（绿）或 `鼠标防护异常`（红）。
+  - 五个块放在**一个控件**里而不是五个：动画每帧都改宽度，五个窗口就是每帧五次
+    `SetWindowPos`，而它们之间一像素的偏差看起来就是「永远对不齐」。
+  - **实现坑**：`SS_OWNERDRAW` 的静态控件默认对鼠标透明（`WM_NCHITTEST` 返回
+    `HTTRANSPARENT`），不加 `SS_NOTIFY` 永远收不到 `WM_MOUSEMOVE`，所有块会一直不动。
+  The status row is a strip of five square status-light blocks in a single
+  owner-draw control: dim lamp-like squares at rest, and the block under the
+  pointer fades brighter and grows until its caption fits. Width and brightness
+  approach their target by a fixed fraction per frame, so a pointer sweeping
+  across the strip re-targets mid-animation instead of restarting.
+- **修复状态行每 400 ms 闪一下**：这一行原来无条件 `SetDlgItemTextW`，即使文字没变也让静态
+  控件擦除并重绘整行。现在只在文本真正变化时写入。这是那个"隔几秒闪一下"的根因。
+  The status line was rewritten every 400 ms whether or not it had changed,
+  which made the static control repaint itself four times a second.
+
+### 修复 / Fixed
+
+- **打开托盘右键菜单会闪退** —— 自学习默认关闭，服务从未启动，但菜单仍去读取它，
+  在一个从未初始化的临界区上进入，访问冲突（`0xC0000005`, `ntdll`）。
+  现在服务区分「从未初始化」与「已停止」：临界区只初始化一次、永不删除，
+  未启动时读取直接返回空建议。退出与恢复默认路径同样加固。
+  Opening the tray menu could crash when self-learning had never been enabled;
+  the service is now safe to read, stop and reset before it was ever started.
+- **体检窗口开着时，点「添加程序」像没反应** —— 文件对话框确实弹了，但它和体检窗口
+  同属隐藏主窗口的子级，被压在体检窗口下面。现在所有对话框优先以可见窗口为 owner，
+  对话框居中在体检窗口上，并把体检窗口置为模态。
+  The file dialog used to open *behind* the check-up window because both were owned
+  by the same hidden tray window; dialogs now prefer the visible window as owner.
+- **改了名单却要切换窗口才生效** —— 前台轮询按 pid 短路，同一个窗口内编辑名单不会
+  重新判定，用户加完程序回到原窗口发现完全没变。现在按「pid + 策略版本号」判断，
+  任何名单或模式改动都会立即作废缓存；轮询周期也从 2 秒收紧到 300 毫秒。
+  Editing a list took effect only after switching to another window and back; the
+  polling thread now also watches a policy revision, so changes apply immediately.
+- **「采用全部学习建议」在样本分散时点了没反应** —— 可用状态按三个键的样本**总和**
+  判断，总和够而单个键都不够时，入口可点却没有任何建议可加。改为「至少一个键有建议」。
+  The adopt entry was enabled by the total sample count instead of per-button
+  readiness, so it could be clickable while every button was still below the minimum.
+- **子菜单的「(未启用)」只在全部程序模式下才出现** —— 白名单生效时，黑名单子菜单
+  看起来仍然启用。现在按「该模式是否就是当前模式」标注。
+  A submenu was marked inactive only in "all programs" mode, so the blacklist looked
+  active while the whitelist was the one in force.
+- **自学习一直显示「样本不足」** —— 三个问题叠在一起：
+  ① 采样只记「已经被阈值拦下」的按下。抖动间隔比当前阈值长时（例如开关抖 60 ms、
+     阈值 50 ms）永远学不到，而这种情况恰恰最需要建议。
+  ② 学习线程等「空闲 300 ms」才重算。用户连续抖动测试时这个空闲永远不会到来，
+     样本在涨但菜单一直不刷新，看起来就是零。
+  ③ 学习关闭时也显示「样本不足」，让人以为正在等样本。
+  现在采样改用固定的 64 ms 窗口，与当前阈值无关；改成样本一增长就重算；
+  关闭时显示「开启后开始采样」，开启时显示「样本：左 N / 右 N / 中 N（需 32）」。
+  `GetTickCount64` 的粒度约 15.6 ms，间隔 0（同一时钟刻内的两次按下）是最确定的
+  抖动，现在也计入样本。
+  Self-learning kept reporting "not enough samples": it only recorded presses the
+  threshold had already rejected (so chatter wider than the threshold could never be
+  learned), it waited for a 300 ms quiet window that continuous testing never
+  produced, and it said "not enough samples" even when sampling was off.
+
+### 新增 / Added
+
+- **一键规则当前程序**：名单子菜单里直接出现「不拦截 chrome.exe」/「只对 chrome.exe 生效」，
+  不用再去文件对话框里找 exe。若当前是「全部程序」模式，点击后会自动切到对应模式——
+  否则配置出来的规则不会生效。
+  One-click rule for the program that was just in front; the mode follows the click.
+- **空白名单会明说后果**：白名单模式且名单为空时，子菜单显示「名单为空：所有程序都不拦截」。
+- **暂停状态可见可撤销**：暂停后菜单项变成「恢复过滤（已暂停）」，再点一次立即恢复。
+- **采用学习建议后给出反馈**：托盘气泡显示「已采用学习建议：左 40 ms, 右 55 ms」，
+  同时清空产生这些建议的样本，避免同一建议反复出现。
+- **合成建议行显示样本数**：`左 50 → 40 ms（32 样本）`，用户能判断可信度。
+
+### 验证 / Verified
+
+Debug / Release × x64 / x86 全量构建零告警（含 `/analyze`）；单测 **3327** 条通过
+（x64 与 x86 各一次）；`audit_printf.py` 164 个调用点无问题；`e2e` / `diagnose` /
+`stuck_key` 各 0 failure。正式版 exe 仍不含 `MouseMend-trace` 字符串。
+真机截图验证三种状态：五个收起方块、主块展开「鼠标防护中」、钩子块展开「钩子 正常」，
+其余四块保持正方形。
+
 ## 2.3.0 — 2026-11-26
 
 ### 修复 / Fixed

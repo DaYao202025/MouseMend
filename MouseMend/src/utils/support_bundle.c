@@ -349,6 +349,7 @@ bool support_bundle_build_text(const SupportReport *report, char *buffer, size_t
 	append(buffer, buffer_count, "hook_events : %u\n", (unsigned)report->hook_events);
 	append(buffer, buffer_count, "inject_fail : %u\n", (unsigned)report->injection_failures);
 	append(buffer, buffer_count, "inject_ref  : %u\n", (unsigned)report->injection_refused);
+	append(buffer, buffer_count, "path_fail   : %u\n", (unsigned)report->path_failures);
 	append(buffer, buffer_count, "recoveries  : %u\n", (unsigned)report->hook_recoveries);
 
 	append(buffer, buffer_count, "\nresources\n-----\n");
@@ -417,56 +418,69 @@ static size_t build_readme(char *buffer, size_t buffer_count)
 // and is therefore the first choice, but it is read-only whenever the program
 // lives in Program Files or on a locked stick. Falling back is not cosmetic: the
 // alternative is a crash that produces no evidence at all.
-static int build_candidates(wchar_t directories[][MAX_PATH], int capacity)
+static int build_candidates(wchar_t directories[][SUPPORT_PATH_CHARS], int capacity,
+							uint32_t *failures)
 {
 	if (!directories || capacity <= 0)
 		return 0;
 
 	int count = 0;
+	if (failures)
+		*failures = 0;
 
-	wchar_t exe[MAX_PATH];
-	DWORD length = GetModuleFileNameW(NULL, exe, ARRAYSIZE(exe));
+	// One scratch buffer reused for each candidate: four separate 2 KB arrays
+	// would put 8 KB on a stack that a crash may have already damaged.
+	wchar_t scratch[SUPPORT_PATH_CHARS];
 
-	if (length > 0 && length < ARRAYSIZE(exe))
+	DWORD length = GetModuleFileNameW(NULL, scratch, ARRAYSIZE(scratch));
+	if (length > 0 && length < ARRAYSIZE(scratch))
 	{
-		wchar_t *separator = wcsrchr(exe, L'\\');
+		wchar_t *separator = wcsrchr(scratch, L'\\');
 		if (separator)
 		{
 			*separator = L'\0';
 			if (count < capacity)
-				StringCchCopyW(directories[count++], MAX_PATH, exe);
+				StringCchCopyW(directories[count++], SUPPORT_PATH_CHARS, scratch);
 		}
+		else if (failures)
+			(*failures)++;
 	}
+	else if (failures)
+		(*failures)++;
 
-	wchar_t desktop[MAX_PATH];
 	if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_DESKTOPDIRECTORY | CSIDL_FLAG_CREATE,
-								   NULL, SHGFP_TYPE_CURRENT, desktop)) &&
+								   NULL, SHGFP_TYPE_CURRENT, scratch)) &&
 		count < capacity)
 	{
-		StringCchCopyW(directories[count++], MAX_PATH, desktop);
+		StringCchCopyW(directories[count++], SUPPORT_PATH_CHARS, scratch);
 	}
+	else if (failures)
+		(*failures)++;
 
-	wchar_t local_app_data[MAX_PATH];
-	DWORD env_length = GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data,
-											   ARRAYSIZE(local_app_data));
-
-	if (env_length > 0 && env_length < ARRAYSIZE(local_app_data) && count < capacity)
+	DWORD env_length = GetEnvironmentVariableW(L"LOCALAPPDATA", scratch,
+											   ARRAYSIZE(scratch));
+	if (env_length > 0 && env_length < ARRAYSIZE(scratch))
 	{
-		wchar_t base[MAX_PATH];
-		if (SUCCEEDED(StringCchPrintfW(base, ARRAYSIZE(base), L"%s\\MouseMend", local_app_data)))
+		wchar_t base[SUPPORT_PATH_CHARS];
+		if (SUCCEEDED(StringCchPrintfW(base, ARRAYSIZE(base), L"%s\\MouseMend", scratch)) &&
+			count < capacity)
 		{
 			CreateDirectoryW(base, NULL); // Ignored: "already exists" is normal
-			StringCchCopyW(directories[count++], MAX_PATH, base);
+			StringCchCopyW(directories[count++], SUPPORT_PATH_CHARS, base);
 		}
+		else if (failures)
+			(*failures)++;
 	}
+	else if (failures)
+		(*failures)++;
 
-	wchar_t temp[MAX_PATH];
-	DWORD temp_length = GetTempPathW(ARRAYSIZE(temp), temp);
-
-	if (temp_length > 0 && temp_length < ARRAYSIZE(temp) && count < capacity)
+	DWORD temp_length = GetTempPathW(ARRAYSIZE(scratch), scratch);
+	if (temp_length > 0 && temp_length < ARRAYSIZE(scratch) && count < capacity)
 	{
-		StringCchCopyW(directories[count++], MAX_PATH, temp);
+		StringCchCopyW(directories[count++], SUPPORT_PATH_CHARS, scratch);
 	}
+	else if (failures)
+		(*failures)++;
 
 	return count;
 }
@@ -478,7 +492,7 @@ static int build_candidates(wchar_t directories[][MAX_PATH], int capacity)
 // executable never loses it.
 static void prune_old_bundles(const wchar_t *directory, const wchar_t *prefix)
 {
-	wchar_t pattern[MAX_PATH];
+	wchar_t pattern[SUPPORT_PATH_CHARS];
 	if (FAILED(StringCchPrintfW(pattern, ARRAYSIZE(pattern), L"%s\\%s-*.zip", directory, prefix)))
 		return;
 
@@ -488,7 +502,9 @@ static void prune_old_bundles(const wchar_t *directory, const wchar_t *prefix)
 	if (find == INVALID_HANDLE_VALUE)
 		return;
 
-	wchar_t names[PRUNE_MAX][MAX_PATH];
+	// 16 x 2 KB cannot go on the crash handler's stack. The caller serialises
+	// all bundle writes, so one static set of names is safe here.
+	static wchar_t names[PRUNE_MAX][SUPPORT_PATH_CHARS];
 	FILETIME stamps[PRUNE_MAX];
 	int count = 0;
 
@@ -500,7 +516,7 @@ static void prune_old_bundles(const wchar_t *directory, const wchar_t *prefix)
 		if (count >= PRUNE_MAX)
 			break;
 
-		StringCchCopyW(names[count], MAX_PATH, data.cFileName);
+		StringCchCopyW(names[count], SUPPORT_PATH_CHARS, data.cFileName);
 		stamps[count] = data.ftLastWriteTime;
 		count++;
 	} while (FindNextFileW(find, &data));
@@ -510,25 +526,25 @@ static void prune_old_bundles(const wchar_t *directory, const wchar_t *prefix)
 	// Newest first, so everything past the keep limit can simply be deleted
 	for (int i = 1; i < count; i++)
 	{
-		wchar_t name[MAX_PATH];
+		wchar_t name[SUPPORT_PATH_CHARS];
 		StringCchCopyW(name, ARRAYSIZE(name), names[i]);
 		FILETIME stamp = stamps[i];
 
 		int j = i - 1;
 		while (j >= 0 && CompareFileTime(&stamps[j], &stamp) < 0)
 		{
-			StringCchCopyW(names[j + 1], MAX_PATH, names[j]);
+			StringCchCopyW(names[j + 1], SUPPORT_PATH_CHARS, names[j]);
 			stamps[j + 1] = stamps[j];
 			j--;
 		}
 
-		StringCchCopyW(names[j + 1], MAX_PATH, name);
+		StringCchCopyW(names[j + 1], SUPPORT_PATH_CHARS, name);
 		stamps[j + 1] = stamp;
 	}
 
 	for (int i = SUPPORT_KEEP_BUNDLES; i < count; i++)
 	{
-		wchar_t path[MAX_PATH];
+		wchar_t path[SUPPORT_PATH_CHARS];
 		if (SUCCEEDED(StringCchPrintfW(path, ARRAYSIZE(path), L"%s\\%s", directory, names[i])))
 			DeleteFileW(path);
 	}
@@ -560,12 +576,15 @@ static bool support_bundle_write_inner(SupportReport *report, const wchar_t *dum
 							: report->crashed ? SUPPORT_PREFIX_CRASH
 											  : SUPPORT_PREFIX_MANUAL;
 
-	wchar_t directories[SUPPORT_DIR_COUNT][MAX_PATH];
-	int directory_count = build_candidates(directories, SUPPORT_DIR_COUNT);
+	// Static with the other buffers in this function; callers are serialised by
+	// support_bundle_write. 4 x 2 KB on the crash stack is not acceptable.
+	static wchar_t directories[SUPPORT_DIR_COUNT][SUPPORT_PATH_CHARS];
+	int directory_count = build_candidates(directories, SUPPORT_DIR_COUNT,
+										   &report->path_failures);
 
 	for (int i = 0; i < directory_count; i++)
 	{
-		wchar_t candidate[MAX_PATH];
+		wchar_t candidate[SUPPORT_PATH_CHARS];
 		if (FAILED(StringCchPrintfW(candidate, ARRAYSIZE(candidate), L"%s\\%s-%s.zip",
 									directories[i], prefix, report->stamp)))
 			continue;
@@ -576,7 +595,7 @@ static bool support_bundle_write_inner(SupportReport *report, const wchar_t *dum
 		{
 			for (int suffix = 2; suffix < 10; suffix++)
 			{
-				wchar_t numbered[MAX_PATH];
+				wchar_t numbered[SUPPORT_PATH_CHARS];
 
 				if (FAILED(StringCchPrintfW(numbered, ARRAYSIZE(numbered), L"%s\\%s-%s-%d.zip",
 											directories[i], prefix, report->stamp, suffix)))
@@ -645,15 +664,15 @@ bool support_bundle_find_newest(const wchar_t *prefix, wchar_t *path, size_t pat
 
 	path[0] = L'\0';
 
-	wchar_t directories[SUPPORT_DIR_COUNT][MAX_PATH];
-	int directory_count = build_candidates(directories, SUPPORT_DIR_COUNT);
+	wchar_t directories[SUPPORT_DIR_COUNT][SUPPORT_PATH_CHARS];
+	int directory_count = build_candidates(directories, SUPPORT_DIR_COUNT, NULL);
 
 	FILETIME newest;
 	SecureZeroMemory(&newest, sizeof(newest));
 
 	for (int i = 0; i < directory_count; i++)
 	{
-		wchar_t pattern[MAX_PATH];
+		wchar_t pattern[SUPPORT_PATH_CHARS];
 		if (FAILED(StringCchPrintfW(pattern, ARRAYSIZE(pattern), L"%s\\%s-*.zip",
 									directories[i], prefix)))
 			continue;
@@ -672,7 +691,7 @@ bool support_bundle_find_newest(const wchar_t *prefix, wchar_t *path, size_t pat
 			if (CompareFileTime(&data.ftLastWriteTime, &newest) <= 0)
 				continue;
 
-			wchar_t candidate[MAX_PATH];
+			wchar_t candidate[SUPPORT_PATH_CHARS];
 			if (FAILED(StringCchPrintfW(candidate, ARRAYSIZE(candidate), L"%s\\%s",
 										directories[i], data.cFileName)))
 				continue;

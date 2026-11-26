@@ -25,6 +25,34 @@
 #define SETTINGS_STATS_SIZE 512
 #define SETTINGS_CAPTION_SIZE 128
 #define SETTINGS_LOG_CHARS 16384
+#define SETTINGS_STATUS_SIZE 384
+
+// Blocks of the status strip: the overall verdict followed by the four
+// optional modules.
+#define SETTINGS_STATUS_BLOCKS 5
+
+// One block of the status strip.
+//
+// The strip is a single owner-draw control that paints five blocks. Idle, every
+// block is a square showing one dim character; the block under the pointer
+// widens until its full caption fits and lights up.
+//
+// Width and light are animated by exponential approach, not by a timed
+// interpolation: each frame covers a fixed fraction of the remaining distance.
+// A pointer that jumps between blocks therefore re-targets smoothly from
+// wherever the block currently is, instead of restarting and snapping.
+typedef struct
+{
+	float width;	   // current width, pixels
+	float from;		   // width when the running animation started
+	float to;		   // width the running animation is heading to
+	uint64_t start_ms; // when the running animation started
+	float duration_ms; // budget of the running animation: opening costs more
+					   // than closing, so the row clears space quickly
+	float target;	   // width that fits the full caption
+	float idle;		   // square width, equal to the control height
+	float level;	   // 0 = collapsed, 1 = open; derived from width
+} StatusBlock;
 
 // A press that has not been released yet is invisible in the log
 // Filling the row in afterwards would mean rewriting a line inside a text
@@ -80,6 +108,30 @@ typedef struct
 
 	// Last rendered summary, so an idle window does not repaint identical strings
 	wchar_t last_stats[SETTINGS_STATS_SIZE];
+
+	// Last rendered status sentence and capability states. Re-setting identical
+	// text on the status control every 400 ms repainted the whole line, and that
+	// is exactly what made it flicker.
+	wchar_t last_status[SETTINGS_STATUS_SIZE];
+	uint8_t last_caps[CAP_COUNT];
+
+	// Status strip, painted by one owner-draw static. Block 0 is the overall
+	// verdict, blocks 1..4 are the optional modules.
+	//
+	// The captions live here rather than in the control: an owner-draw static has
+	// no text of its own, and WM_DRAWITEM can arrive long after the refresh that
+	// produced the state.
+	StatusBlock strip[SETTINGS_STATUS_BLOCKS];
+	uint8_t strip_state[SETTINGS_STATUS_BLOCKS];
+	wchar_t strip_full[SETTINGS_STATUS_BLOCKS][64];
+
+	// Block under the pointer, or -1. Kept beside the blocks so the animation
+	// tick knows where it is heading without asking the cursor again.
+	int strip_hover;
+
+	// Dialog font. The pills are drawn by hand, so they have to select this
+	// explicitly or they would come out in the system font and look foreign.
+	HFONT base_font;
 
 	// Last rendered caption of the blocked pane (it carries the near miss count)
 	wchar_t last_caption[SETTINGS_CAPTION_SIZE];

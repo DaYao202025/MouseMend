@@ -18,6 +18,10 @@
 #define IDC_GROUP_TEST                  1008
 #define IDC_GROUP_DIAG                  1009
 #define IDC_STATUS                      1011
+#define IDC_CAP_HOOK                    1044
+#define IDC_CAP_LEARN                   1045
+#define IDC_CAP_LIST                    1046
+#define IDC_CAP_LOG                     1047
 #define IDC_DIAGHINT                    1012
 #define IDC_RIPPLE                      1013
 #define IDC_FILTER_AUTO                 1014

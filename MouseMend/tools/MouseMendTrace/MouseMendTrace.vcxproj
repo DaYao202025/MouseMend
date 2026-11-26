@@ -163,6 +163,14 @@
     <ClCompile Include="..\..\src\core\mouse_hook.c" />
     <ClCompile Include="..\..\src\core\notify_policy.c" />
     <ClCompile Include="..\..\src\core\settings.c" />
+    <ClCompile Include="..\..\src\core\signal_ring.c" />
+    <ClCompile Include="..\..\src\core\learning.c" />
+    <ClCompile Include="..\..\src\core\learning_service.c" />
+    <ClCompile Include="..\..\src\core\context_filter.c" />
+    <ClCompile Include="..\..\src\core\context_service.c" />
+    <ClCompile Include="..\..\src\core\context_store.c" />
+    <ClCompile Include="..\..\src\core\command_classify.c" />
+    <ClCompile Include="..\..\src\core\app_capabilities.c" />
     <ClCompile Include="..\..\src\ui\about_window.c" />
     <ClCompile Include="..\..\src\ui\help_window.c" />
     <ClCompile Include="..\..\src\ui\context_menu.c" />

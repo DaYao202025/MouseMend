@@ -43,6 +43,39 @@
 #define IDM_DRAG_DISTANCE_BASE (WM_USER + 70)
 #define IDM_RESTORE_DEFAULTS (WM_USER + 80)
 
+// Self-learning (opt-in). New IDs go after the existing ranges so the smoke
+// test's hardcoded IDs and the threshold codec keep their values.
+#define IDM_TOGGLE_LEARNING (WM_USER + 81)
+#define IDM_ADOPT_LEARNING (WM_USER + 82)
+#define IDM_PAUSE_CONTEXT (WM_USER + 83)
+
+// One-click rule for the program that was in front a moment ago. The polling
+// thread already keeps its name, so the user does not have to hunt for the exe
+// in a file dialog. Two IDs because the same click means opposite things in the
+// two lists: "never filter this" vs "only filter this".
+#define IDM_EXCLUDE_CURRENT (WM_USER + 84)
+#define IDM_ONLY_CURRENT (WM_USER + 91)
+
+// Context modes. The two submenus each have their own "off" entry so a click
+// can never be ambiguous about which list the user was looking at.
+#define IDM_CONTEXT_MODE_ALL_WHITE (WM_USER + 85)
+#define IDM_CONTEXT_MODE_WHITELIST (WM_USER + 86)
+#define IDM_CONTEXT_MODE_BLACKLIST (WM_USER + 87)
+#define IDM_CONTEXT_ADD_WHITE (WM_USER + 88)
+#define IDM_CONTEXT_ADD_BLACK (WM_USER + 89)
+#define IDM_CONTEXT_MODE_ALL_BLACK (WM_USER + 90)
+
+// Per-entry list IDs. Declared here so the compile-time guard below can see
+// them; keep in sync with CONTEXT_LIST_MAX in context_filter.h.
+#define IDM_CONTEXT_LIST_WHITE (WM_USER + 3000)
+#define IDM_CONTEXT_LIST_BLACK (WM_USER + 3100)
+#define IDM_CONTEXT_LIST_MAX 16
+
+// Posted after a menu closes, so the file dialog does not fight the modal
+// TrackPopupMenu loop. A second hop keeps it out of the WM_NULL that follows.
+#define WM_APP_ADD_EXE (WM_APP + 13)
+#define WM_APP_ADD_EXE_FILE (WM_APP + 14)
+
 // Language menu IDs
 #define IDM_LANG_EN (WM_USER + 50)
 #define IDM_LANG_ZH (WM_USER + 51)
@@ -62,6 +95,19 @@
 // this layout supports (the project currently uses 7).
 #if (IDM_THRESHOLD_BASE + 8 * IDM_THRESHOLD_SLOTS) > IDM_THRESHOLD_CUSTOM
 #error "IDM threshold ranges overlap: raise IDM_THRESHOLD_CUSTOM"
+#endif
+
+// The context lists live after every existing range. These guards exist
+// because a silently overlapping ID is very hard to notice: the threshold
+// decoder would claim the click first.
+#if (IDM_CONTEXT_LIST_WHITE + IDM_CONTEXT_LIST_MAX) > IDM_CONTEXT_LIST_BLACK
+#error "context list ID ranges overlap"
+#endif
+#if (IDM_CONTEXT_LIST_BLACK + IDM_CONTEXT_LIST_MAX) > (WM_USER + 4000)
+#error "context list range is too wide"
+#endif
+#if (IDM_CONTEXT_MODE_ALL_BLACK) >= IDM_THRESHOLD_BASE
+#error "context mode IDs collide with the threshold range"
 #endif
 
 #define IDM_THRESHOLD_PRESET_ID(button, index) \

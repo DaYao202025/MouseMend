@@ -8,6 +8,7 @@
 #include <strsafe.h>
 #include <shellapi.h>
 #include <commctrl.h>
+#include <windowsx.h>
 #include <string.h>
 #include <wchar.h>
 
@@ -50,7 +51,7 @@
 
 #define SETTINGS_DIAG_SIZE 4096
 #define SETTINGS_EVIDENCE_SIZE 1536
-#define SETTINGS_STATUS_SIZE 384
+
 
 // Minimum time between two event driven self check rebuilds. A badly bouncing
 // button can block dozens of clicks per second and each rebuild repaints the
@@ -67,9 +68,38 @@
 // is about 7.3 px here, which is what makes a whole row fit the pane.
 #define SETTINGS_LOG_FONT_PIXELS 11
 
+// How long a block takes to open, in milliseconds.
+//
+// Fixed duration rather than fixed distance: the user asked for "fully open
+// within 100 ms", and a duration is also what makes every block finish at the
+// same moment instead of the wider ones trailing behind.
+#define SETTINGS_STATUS_OPEN_MS 100.0f
+
+// How long a block takes to close. Zero, on purpose.
+//
+// A block's left edge is the sum of the current widths of the blocks before it,
+// so as long as the closing block is still mid-animation, every block after it
+// slides left while it grows - which reads as "it opens from the left". Closing
+// instantly reflows the layout before a single frame of the opening animation is
+// drawn, leaving only the right edge in motion.
+#define SETTINGS_STATUS_CLOSE_MS 0.0f
+
+// Gap between two blocks, and the padding inside a block once it is expanded.
+#define SETTINGS_STATUS_GAP 2
+#define SETTINGS_STATUS_PAD 4
+
+// Extra width reserved past the measured caption, 3 px on each side. Text
+// measurement and the actual glyph run do not agree to the pixel, and without
+// this the last character of a long caption gets clipped by a hair.
+#define SETTINGS_STATUS_SLACK 6
+
 static void refresh_diagnostics(HWND hDlg, SettingsWindow *window, bool rebuild_report);
 static void apply_language(HWND hDlg);
 static void update_filter_tooltips(HWND hDlg, SettingsWindow *window);
+static void refresh_capabilities(HWND hDlg, SettingsWindow *window,
+								 const uint8_t states[CAP_COUNT], bool hook_active);
+static void status_strip_set_caption(SettingsWindow *window, int index);
+static void set_anim_rate(HWND hDlg, SettingsWindow *window, bool fast);
 
 // Store the window state on the dialog (modeless dialogs have no DWLP_USER by
 // default, so it is set in WM_INITDIALOG and cleared in WM_DESTROY).
@@ -439,15 +469,24 @@ static void refresh_live(HWND hDlg, SettingsWindow *window)
 		// The chart hint and the pane captions are drawn or formatted elsewhere
 		window->last_stats[0] = L'\0';
 		window->last_caption[0] = L'\0';
+
+		// Strip captions are built from the language table, so the cached states
+		// have to be thrown away or the old language would stay on screen until
+		// the next state change. Block 0 is not driven by last_caps, hence the
+		// explicit refill.
+		memset(window->last_caps, 0xFF, sizeof(window->last_caps));
+		status_strip_set_caption(window, 0);
+
 		InvalidateRect(GetDlgItem(hDlg, IDC_RIPPLE), NULL, TRUE);
 	}
 
 	AppSnapshot snapshot = {0};
 	window->snapshot(&snapshot, window->snapshot_user);
 
-	wchar_t status[SETTINGS_STATUS_SIZE];
-	log_format_status(&snapshot, status, ARRAYSIZE(status));
-	SetDlgItemTextW(hDlg, IDC_STATUS, status);
+	// The verdict used to be a separate control with its own cached string. The
+	// strip derives block 0 from this same flag, so there is nothing to set here;
+	// refresh_capabilities takes care of it and only repaints on a real change.
+	refresh_capabilities(hDlg, window, snapshot.capabilities, snapshot.hook_active);
 
 	// Only touch a control when its text actually changed: repainting identical
 	// strings every tick is pointless work on the thread that also runs the hook.
@@ -606,6 +645,545 @@ static void create_filter_tooltips(HWND hDlg, SettingsWindow *window)
 		if (tool.uId)
 			SendMessageW(window->tooltip, TTM_ADDTOOLW, 0, (LPARAM)&tool);
 	}
+}
+
+// --------------------------------------------------------------- status strip ---
+//
+// One owner-draw control paints five blocks: the overall verdict, then one per
+// optional module. The previous shape was five separate controls, which cannot
+// change width without moving five windows on every frame - that is also what
+// makes them drift apart. Here all five blocks are laid out in one client
+// rectangle, so a block starts exactly where the last frame ended, at every DPI,
+// with no cross-control alignment to get wrong.
+
+static const LangStringId CAP_NAMES[CAP_COUNT] = {
+	STR_CAP_HOOK, STR_CAP_LEARNING, STR_CAP_CONTEXT, STR_CAP_LOG};
+
+// One character per block while it is collapsed. English needs distinct initials
+// because "Learn" and "List" would otherwise both read "L".
+static const LangStringId CAP_SHORT[CAP_COUNT] = {
+	STR_CAP_SHORT_HOOK, STR_CAP_SHORT_LEARNING, STR_CAP_SHORT_CONTEXT, STR_CAP_SHORT_LOG};
+
+// One palette per block, four states each: five hues, twenty colours, no two
+// alike. The hue identifies which block it is (green verdict, blue hook, violet
+// learning, amber lists, teal log); the four shades inside a hue identify the
+// state, always in the same order - disabled palest, stalled darkest and most
+// saturated.
+//
+// Colour can no longer carry the whole verdict by itself, which is the price of
+// five distinct hues: "stalled" is the darkest block of its own hue instead of a
+// universal red. That is acceptable because the caption states the state in
+// words, and because one dark block among four paler ones is still the odd one
+// out at a glance.
+//
+// Column order matches CapabilityState: DISABLED, OK, UNKNOWN, STALLED.
+//
+// Disabled is desaturated, not lightened: a pale tint would end up brighter
+// than a dimmed "ok" block and read as the healthiest one on the row.
+static const COLORREF STRIP_LIT[SETTINGS_STATUS_BLOCKS][4] = {
+	// 0: verdict, green
+	{RGB(0x7A, 0x94, 0x84), RGB(0x2E, 0x8B, 0x57), RGB(0x6F, 0xA6, 0x88), RGB(0x1B, 0x5E, 0x3A)},
+	// 1: hook, blue
+	{RGB(0x7A, 0x8A, 0x9C), RGB(0x2B, 0x6C, 0xB0), RGB(0x6B, 0x9B, 0xC8), RGB(0x1A, 0x45, 0x73)},
+	// 2: learning, violet
+	{RGB(0x8E, 0x84, 0xA0), RGB(0x7C, 0x4D, 0xBE), RGB(0xA2, 0x84, 0xD4), RGB(0x4E, 0x2C, 0x7E)},
+	// 3: lists, amber
+	{RGB(0xA8, 0x94, 0x84), RGB(0xC7, 0x7A, 0x2B), RGB(0xD9, 0xA6, 0x6C), RGB(0x8A, 0x4E, 0x14)},
+	// 4: log, teal
+	{RGB(0x7E, 0x94, 0x94), RGB(0x1F, 0x8A, 0x8A), RGB(0x63, 0xAE, 0xAE), RGB(0x10, 0x56, 0x56)},
+};
+
+static LangStringId cap_state_text(uint8_t state)
+{
+	switch (state)
+	{
+	case CAP_STATE_OK:
+		return STR_CAP_STATE_OK;
+	case CAP_STATE_UNKNOWN:
+		return STR_CAP_STATE_UNKNOWN;
+	case CAP_STATE_STALLED:
+		return STR_CAP_STATE_STALLED;
+	default:
+		return STR_CAP_STATE_DISABLED;
+	}
+}
+
+static uint8_t cap_clamp(uint8_t state)
+{
+	return state > (uint8_t)CAP_STATE_STALLED ? (uint8_t)CAP_STATE_UNKNOWN : state;
+}
+
+// No tooltip on the strip: hovering already reveals the full caption, and a tip
+// repeating what is now on screen would only cover the block being read.
+
+// Draw text vertically centred inside rc.
+//
+// DrawText with DT_VCENTER is the only reliable way to put hand-drawn text on
+// the same baseline as a real button. Guessing at y offsets from the font
+// metrics is what makes owner-draw drift between DPI settings.
+static void draw_centered_text(HDC dc, const RECT *rc, const wchar_t *text,
+							   COLORREF color, HFONT font, UINT align)
+{
+	if (!dc || !rc || !text || !text[0])
+		return;
+
+	SetBkMode(dc, TRANSPARENT);
+	SetTextColor(dc, color);
+
+	HGDIOBJ old_font = font ? SelectObject(dc, font) : NULL;
+
+	RECT r = *rc;
+	DrawTextW(dc, text, -1, &r, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+	if (old_font)
+		SelectObject(dc, old_font);
+}
+
+// Small helpers instead of <math.h>: the project builds as plain C, and pulling
+// in the CRT float helpers for two functions is not worth the dependency.
+static float float_abs(float value)
+{
+	return value < 0.0f ? -value : value;
+}
+
+static int color_channel(int value)
+{
+	if (value < 0)
+		return 0;
+	if (value > 255)
+		return 255;
+
+	return value;
+}
+
+static COLORREF lerp_color(COLORREF from, COLORREF to, float t)
+{
+	int red = (int)(GetRValue(from) + (GetRValue(to) - GetRValue(from)) * t + 0.5f);
+	int green = (int)(GetGValue(from) + (GetGValue(to) - GetGValue(from)) * t + 0.5f);
+	int blue = (int)(GetBValue(from) + (GetBValue(to) - GetBValue(from)) * t + 0.5f);
+
+	return RGB(color_channel(red), color_channel(green), color_channel(blue));
+}
+
+static LangStringId block_short_name(int index)
+{
+	return index == 0 ? STR_STATUS_SHORT_STRIP : CAP_SHORT[index - 1];
+}
+
+// Fill the caption of one block from its stored state.
+static void status_strip_set_caption(SettingsWindow *window, int index)
+{
+	if (!window || index < 0 || index >= SETTINGS_STATUS_BLOCKS)
+		return;
+
+	if (index == 0)
+	{
+		LangStringId text = window->strip_state[0] == (uint8_t)CAP_STATE_OK
+								? STR_STATUS_STRIP_OK
+								: STR_STATUS_STRIP_BAD;
+
+		StringCchCopyW(window->strip_full[0], ARRAYSIZE(window->strip_full[0]),
+					   lang_str(text));
+		return;
+	}
+
+	uint8_t state = cap_clamp(window->strip_state[index]);
+
+	StringCchPrintfW(window->strip_full[index], ARRAYSIZE(window->strip_full[index]),
+					 lang_str(STR_CAP_LABEL_FMT),
+					 lang_str(CAP_NAMES[index - 1]), lang_str(cap_state_text(state)));
+}
+
+// Measure every caption and decide how wide its block has to be.
+//
+// Called on each state or language change: the same state is a different width
+// in the other language, and a stale target would clip the caption.
+static void status_strip_measure(HWND hDlg, SettingsWindow *window)
+{
+	if (!hDlg || !window)
+		return;
+
+	HWND control = GetDlgItem(hDlg, IDC_STATUS);
+	if (!control)
+		return;
+
+	RECT client;
+	if (!GetClientRect(control, &client))
+		return;
+
+	float height = (float)(client.bottom - client.top);
+	if (height < 1.0f)
+		height = 14.0f;
+
+	HDC dc = GetDC(control);
+	HGDIOBJ old_font = (dc && window->base_font) ? SelectObject(dc, window->base_font) : NULL;
+
+	for (int i = 0; i < SETTINGS_STATUS_BLOCKS; i++)
+	{
+		StatusBlock *block = &window->strip[i];
+		SIZE extent = {0};
+
+		if (dc && window->strip_full[i][0])
+			GetTextExtentPoint32W(dc, window->strip_full[i],
+								  (int)wcslen(window->strip_full[i]), &extent);
+
+		// 3 px of slack per side: measured width and the real glyph run do not
+		// agree to the pixel, and without it the last character loses a hair.
+		float target = (float)(extent.cx + 2 * SETTINGS_STATUS_PAD + SETTINGS_STATUS_SLACK);
+
+		// A block grows out of a square and can never outgrow the strip: the
+		// clamp is what stops a long caption in the last block from pushing the
+		// row outside its control.
+		if (target < height)
+			target = height;
+		if (target > (float)(client.right - client.left))
+			target = (float)(client.right - client.left);
+
+		block->idle = height;
+		block->target = target;
+
+		// First measurement: start settled, so opening the window does not play
+		// five blocks growing out of nothing.
+		if (block->width <= 0.0f)
+			block->width = height;
+	}
+
+	if (dc && old_font)
+		SelectObject(dc, old_font);
+
+	if (dc)
+		ReleaseDC(control, dc);
+}
+
+// Place the five blocks for the widths of the current frame.
+static void layout_status_strip(const SettingsWindow *window, const RECT *area,
+								RECT blocks[SETTINGS_STATUS_BLOCKS])
+{
+	int x = area->left;
+
+	for (int i = 0; i < SETTINGS_STATUS_BLOCKS; i++)
+	{
+		int width = (int)(window->strip[i].width + 0.5f);
+
+		if (width < 1)
+			width = 1;
+
+		blocks[i].left = x;
+		blocks[i].top = area->top;
+		blocks[i].right = x + width;
+		blocks[i].bottom = area->bottom;
+
+		x += width + SETTINGS_STATUS_GAP;
+	}
+}
+
+static void draw_status_strip(const DRAWITEMSTRUCT *dis, SettingsWindow *window)
+{
+	RECT area = dis->rcItem;
+	HDC dc = dis->hDC;
+
+	if (area.right <= area.left || area.bottom <= area.top)
+		return;
+
+	// An owner-draw static does not erase itself
+	FillRect(dc, &area, GetSysColorBrush(COLOR_BTNFACE));
+
+	if (!window)
+		return;
+
+	RECT blocks[SETTINGS_STATUS_BLOCKS];
+	layout_status_strip(window, &area, blocks);
+
+	HGDIOBJ old_font = window->base_font ? SelectObject(dc, window->base_font) : NULL;
+	HGDIOBJ old_brush = SelectObject(dc, GetStockObject(DC_BRUSH));
+
+	SetBkMode(dc, TRANSPARENT);
+
+	for (int i = 0; i < SETTINGS_STATUS_BLOCKS; i++)
+	{
+		const RECT *block = &blocks[i];
+		uint8_t state = cap_clamp(window->strip_state[i]);
+		float level = window->strip[i].level;
+
+		if (block->right <= block->left)
+			continue;
+
+		// Full brightness at rest, by request: the row is meant to read as five
+		// solid colours, and the open block is identified by its width and its
+		// brighter caption instead of by a dimmed background.
+		COLORREF lit = STRIP_LIT[i][state];
+		COLORREF background = lit;
+
+		SetDCBrushColor(dc, background);
+		FillRect(dc, block, (HBRUSH)GetStockObject(DC_BRUSH));
+
+		// The single character and the full caption cross fade. One is gone
+		// before the other becomes readable, so the two never overlap into a
+		// blur in the middle of the animation.
+		float reveal = (level - 0.35f) / 0.65f;
+
+		if (reveal < 0.0f)
+			reveal = 0.0f;
+		if (reveal > 1.0f)
+			reveal = 1.0f;
+
+		RECT text = *block;
+		text.left += SETTINGS_STATUS_PAD;
+		text.right -= SETTINGS_STATUS_PAD;
+
+		if (text.right <= text.left)
+			continue;
+
+		// Both captions are anchored to the same left edge on purpose. Drawing
+		// the short one centred and the long one left-aligned made the text slide
+		// from the middle outwards while the block grew, which read as "it opens
+		// from both ends". Anchored left, only the right edge moves: the block
+		// slides open to the right, and the text never moves at all.
+		if (reveal < 0.98f)
+		{
+			// 35% ink on a full-brightness block: the character is a hint of what
+			// the block is, not a label competing with the open one.
+			COLORREF ink = lerp_color(background, RGB(255, 255, 255),
+									  0.35f * (1.0f - reveal));
+
+			draw_centered_text(dc, &text, lang_str(block_short_name(i)), ink,
+							   window->base_font, DT_LEFT);
+		}
+
+		if (reveal > 0.02f)
+		{
+			COLORREF ink = lerp_color(background, RGB(255, 255, 255),
+									  0.35f + 0.65f * reveal);
+
+			draw_centered_text(dc, &text, window->strip_full[i], ink,
+							   window->base_font, DT_LEFT);
+		}
+	}
+
+	if (old_brush)
+		SelectObject(dc, old_brush);
+	if (old_font)
+		SelectObject(dc, old_font);
+}
+
+static int status_strip_hit(HWND control, const SettingsWindow *window, POINT point)
+{
+	RECT client;
+
+	if (!control || !window || !GetClientRect(control, &client))
+		return -1;
+
+	RECT blocks[SETTINGS_STATUS_BLOCKS];
+	layout_status_strip(window, &client, blocks);
+
+	for (int i = 0; i < SETTINGS_STATUS_BLOCKS; i++)
+	{
+		// The gap belongs to nobody: sweeping across the strip collapses every
+		// block for an instant, which reads as one continuous move instead of
+		// two blocks flickering at each other.
+		if (point.x >= blocks[i].left && point.x < blocks[i].right &&
+			point.y >= blocks[i].top && point.y < blocks[i].bottom)
+			return i;
+	}
+
+	return -1;
+}
+
+// Advance every block to where it should be at now.
+//
+// Fixed duration, linear: whatever the distance, the block is fully open after
+// SETTINGS_STATUS_OPEN_MS and fully closed after SETTINGS_STATUS_CLOSE_MS.
+// Nothing eases out, so the last pixels cross at the same speed as the first
+// ones - the "it hesitates before it finishes" look came from an exponential
+// approach, not from the layout.
+//
+// A pointer that changes target mid-way restarts from wherever the block
+// currently is, with a fresh budget, so the movement stays continuous.
+//
+// Returns true while anything still moves, so the caller keeps the fast timer.
+static bool status_strip_tick(SettingsWindow *window, uint64_t now)
+{
+	if (!window)
+		return false;
+
+	bool moving = false;
+
+	for (int i = 0; i < SETTINGS_STATUS_BLOCKS; i++)
+	{
+		StatusBlock *block = &window->strip[i];
+
+		// Exactly one block is always open. With the pointer outside the strip,
+		// or on a gap between blocks, block 0 keeps its caption: the overall
+		// verdict is then permanently on screen, and the row always has the same
+		// silhouette instead of collapsing into five anonymous squares.
+		bool expanded = (i == window->strip_hover) ||
+						(window->strip_hover < 0 && i == 0);
+
+		float want = expanded ? block->target : block->idle;
+
+		if (float_abs(want - block->to) > 0.01f)
+		{
+			// Opening gets the full budget; closing gets less, so the block that
+			// frees the space is already out of the way while its neighbour is
+			// still expanding.
+			block->duration_ms = (want > block->width) ? SETTINGS_STATUS_OPEN_MS
+													   : SETTINGS_STATUS_CLOSE_MS;
+
+			block->from = block->width;
+			block->to = want;
+			block->start_ms = now;
+		}
+
+		// A zero budget means "already done": closing has to land in the same
+		// frame it starts, or the blocks after it would slide left while the
+		// opening one grows.
+		float progress = (block->duration_ms > 0.0f)
+							 ? (float)(now - block->start_ms) / block->duration_ms
+							 : 1.0f;
+
+		if (progress >= 1.0f)
+		{
+			// The frame that ends the animation still has to be painted. Without
+			// this the last painted frame is the one before the end - a few
+			// percent short - and then the timer stops, so the caption stays
+			// clipped until something else invalidates the control. That is
+			// exactly the "it only finishes when I move the mouse" the user saw.
+			if (block->width != block->to)
+			{
+				block->width = block->to;
+				moving = true;
+			}
+		}
+		else
+		{
+			// Linear on purpose: an ease-out curve is exactly what made the final
+			// pixels feel slower than the rest of the movement.
+			block->width = block->from + (block->to - block->from) * progress;
+			moving = true;
+		}
+
+		// The text brightness is the same progress, not a second animation, so a
+		// block is fully readable exactly when it is fully open.
+		float span = block->target - block->idle;
+
+		if (span < 1.0f)
+			span = 1.0f;
+
+		float level = (block->width - block->idle) / span;
+
+		if (level < 0.0f)
+			level = 0.0f;
+		if (level > 1.0f)
+			level = 1.0f;
+
+		block->level = level;
+	}
+
+	return moving;
+}
+
+// The strip is one control, so hover has to be tracked here: a static does not
+// forward WM_MOUSEMOVE to its parent.
+static LRESULT CALLBACK status_strip_subclass(HWND hwnd, UINT msg, WPARAM wParam,
+											  LPARAM lParam, UINT_PTR id, DWORD_PTR ref)
+{
+	SettingsWindow *window = (SettingsWindow *)ref;
+
+	switch (msg)
+	{
+	case WM_MOUSEMOVE:
+	{
+		if (!window)
+			break;
+
+		// Without this the control never learns the pointer left, and the block
+		// stays lit for as long as the window is open.
+		TRACKMOUSEEVENT track = {0};
+		track.cbSize = sizeof(track);
+		track.dwFlags = TME_LEAVE;
+		track.hwndTrack = hwnd;
+		TrackMouseEvent(&track);
+
+		POINT point = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+		int hit = status_strip_hit(hwnd, window, point);
+
+		if (hit != window->strip_hover)
+		{
+			window->strip_hover = hit;
+			InvalidateRect(hwnd, NULL, FALSE);
+
+			// The block that just started moving needs frames; a settled strip
+			// lets the timer fall back to its idle rate by itself.
+			set_anim_rate(GetParent(hwnd), window, true);
+		}
+
+		return 0;
+	}
+
+	case WM_MOUSELEAVE:
+		if (window && window->strip_hover >= 0)
+		{
+			window->strip_hover = -1;
+			InvalidateRect(hwnd, NULL, FALSE);
+			set_anim_rate(GetParent(hwnd), window, true);
+		}
+		return 0;
+
+	case WM_NCDESTROY:
+		RemoveWindowSubclass(hwnd, status_strip_subclass, id);
+		break;
+
+	default:
+		break;
+	}
+
+	return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+// Repaint the strip only when one of the states actually changed.
+static void refresh_capabilities(HWND hDlg, SettingsWindow *window,
+								 const uint8_t states[CAP_COUNT], bool hook_active)
+{
+	if (!hDlg || !window || !states)
+		return;
+
+	bool changed = false;
+
+	// Block 0 answers "is the mouse protected", which is the hook's own state.
+	// The four modules can all be healthy while the hook is gone, so this cannot
+	// be derived from them.
+	uint8_t verdict = hook_active ? (uint8_t)CAP_STATE_OK : (uint8_t)CAP_STATE_STALLED;
+
+	if (verdict != window->strip_state[0])
+	{
+		window->strip_state[0] = verdict;
+		status_strip_set_caption(window, 0);
+		changed = true;
+	}
+
+	for (int i = 0; i < CAP_COUNT; i++)
+	{
+		uint8_t state = cap_clamp(states[i]);
+
+		if (state == window->last_caps[i])
+			continue;
+
+		window->last_caps[i] = state;
+		window->strip_state[i + 1] = state;
+		status_strip_set_caption(window, i + 1);
+		changed = true;
+	}
+
+	if (!changed)
+		return;
+
+	// Captions change width with the state and with the language, so the target
+	// widths have to be measured again rather than assumed constant.
+	status_strip_measure(hDlg, window);
+
+	HWND control = GetDlgItem(hDlg, IDC_STATUS);
+	if (control)
+		InvalidateRect(control, NULL, FALSE);
 }
 
 // Repoint the hover tips at the active language
@@ -828,6 +1406,13 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		window->last_anim_ms = GetTickCount64();
 		ripple_view_reset(&window->ripple);
 
+		// The strip starts collapsed: every block at its square width, nothing
+		// lit, and no pointer. The first measurement turns the zero widths into
+		// the real square size before anything is painted.
+		memset(window->strip, 0, sizeof(window->strip));
+		memset(window->strip_state, 0, sizeof(window->strip_state));
+		window->strip_hover = -1;
+
 		if (window->trace)
 			event_trace_clear(window->trace);
 
@@ -879,6 +1464,21 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		apply_language(hDlg);
 		window->applied_language = language_get();
 		create_filter_tooltips(hDlg, window);
+
+		// Hand-drawn text has to select the dialog font itself; without this it
+		// would come out in the stock system font and look foreign.
+		window->base_font = (HFONT)SendMessageW(hDlg, WM_GETFONT, 0, 0);
+
+		// 0xFF is not a valid state, so the first refresh fills every caption
+		// instead of treating "disabled" as "already drawn and unchanged".
+		memset(window->last_caps, 0xFF, sizeof(window->last_caps));
+
+		// Hover is tracked on the control itself: a static does not forward
+		// WM_MOUSEMOVE to the dialog, and without it no block would ever light.
+		HWND strip = GetDlgItem(hDlg, IDC_STATUS);
+		if (strip)
+			SetWindowSubclass(strip, status_strip_subclass, 1, (DWORD_PTR)window);
+
 		update_filter_ui(hDlg, window, false);
 		clear_logs(hDlg, window);
 
@@ -936,6 +1536,13 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 			uint64_t now = GetTickCount64();
 			bool repaint = ripple_view_tick(&window->ripple, now);
 
+			// The strip rides the same timer: same 60 Hz while it moves, same
+			// fall back to the idle rate once it settles.
+			bool strip_moving = status_strip_tick(window, now);
+
+			if (strip_moving)
+				InvalidateRect(GetDlgItem(hDlg, IDC_STATUS), NULL, FALSE);
+
 			// Coalesced: every click in the last 100 ms lands in the same rewrite
 			window->pending_panes |= changed;
 
@@ -957,7 +1564,7 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 
 			// Full rate only while something is moving, plus a moment after the
 			// last frame so a click that follows a pause is still drawn at once.
-			bool busy = repaint || changed != 0;
+			bool busy = repaint || changed != 0 || strip_moving;
 
 			if (busy)
 				window->last_anim_ms = now;
@@ -983,6 +1590,13 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		if (item && item->CtlID == IDC_RIPPLE && window)
 		{
 			ripple_view_draw(&window->ripple, item, GetTickCount64(), lang_str(STR_TEST_HINT));
+			return TRUE;
+		}
+
+		// The whole status strip is one control: five blocks, one layout
+		if (item && item->CtlID == IDC_STATUS)
+		{
+			draw_status_strip(item, window);
 			return TRUE;
 		}
 

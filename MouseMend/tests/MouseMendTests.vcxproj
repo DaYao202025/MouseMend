@@ -80,6 +80,12 @@
     <ClCompile Include="..\src\core\event_trace.c" />
     <ClCompile Include="..\src\core\hook_watchdog.c" />
     <ClCompile Include="..\src\core\notify_policy.c" />
+    <ClCompile Include="..\src\core\signal_ring.c" />
+    <ClCompile Include="..\src\core\learning.c" />
+    <ClCompile Include="..\src\core\command_classify.c" />
+    <ClCompile Include="..\src\core\app_capabilities.c" />
+    <ClCompile Include="..\src\core\learning_service.c" />
+    <ClCompile Include="..\src\core\context_filter.c" />
     <ClCompile Include="..\src\ui\language.c" />
     <ClCompile Include="..\src\ui\log_format.c" />
     <ClCompile Include="..\src\ui\ripple_view.c" />
@@ -93,6 +99,12 @@
     <ClInclude Include="..\src\core\event_trace.h" />
     <ClInclude Include="..\src\core\mouse_hook.h" />
     <ClInclude Include="..\src\core\notify_policy.h" />
+    <ClInclude Include="..\src\core\signal_ring.h" />
+    <ClInclude Include="..\src\core\learning.h" />
+    <ClInclude Include="..\src\core\command_classify.h" />
+    <ClInclude Include="..\src\core\app_capabilities.h" />
+    <ClInclude Include="..\src\core\learning_service.h" />
+    <ClInclude Include="..\src\core\context_filter.h" />
     <ClInclude Include="..\src\ui\language.h" />
     <ClInclude Include="..\src\ui\ripple_view.h" />
   </ItemGroup>

@@ -64,6 +64,7 @@ $IDM_TOGGLE_NOTIFY = $WM_USER + 15
 $IDM_TOGGLE_LOG = $WM_USER + 16
 $IDM_OPEN_SETTINGS = $WM_USER + 17
 $IDM_RESTORE_DEFAULTS = $WM_USER + 80
+$IDM_TOGGLE_LEARNING = $WM_USER + 81
 $IDM_LANG_EN = $WM_USER + 50
 $IDM_LANG_ZH = $WM_USER + 51
 $IDM_RELEASE_DELAY_BASE = $WM_USER + 60
@@ -218,6 +219,17 @@ Send-Command $IDM_TOGGLE_LOG
 $settings = Get-ItemProperty -Path $regPath
 Check 'LogBlocked (disabled again)' $settings.LogBlocked 0
 
+# Self-learning is opt-in: it must start off, persist an explicit enable, and
+# be switched off again by Restore Defaults below.
+Check 'LearningEnabled defaults to off' $settings.LearningEnabled 0
+Check 'ContextMode defaults to ALL' $settings.ContextMode 0
+Send-Command $IDM_TOGGLE_LEARNING
+$settings = Get-ItemProperty -Path $regPath
+Check 'LearningEnabled (enabled)' $settings.LearningEnabled 1
+Send-Command $IDM_TOGGLE_LEARNING
+$settings = Get-ItemProperty -Path $regPath
+Check 'LearningEnabled (disabled again)' $settings.LearningEnabled 0
+
 # 8. The settings window must open and close without disturbing the tray part
 Send-Command $IDM_OPEN_SETTINGS
 $settingsDialog = [Native]::FindVisible([uint32]$proc.Id, '#32770')
@@ -251,6 +263,8 @@ else {
     $settings = Get-ItemProperty -Path $regPath
     Check 'NotifyBlocked (after restore defaults)' $settings.NotifyBlocked 0
     Check 'LogBlocked (after restore defaults)' $settings.LogBlocked 0
+    Check 'LearningEnabled (after restore defaults)' $settings.LearningEnabled 0
+    Check 'ContextMode (after restore defaults)' $settings.ContextMode 0
 }
 
 # 10. Clean shutdown

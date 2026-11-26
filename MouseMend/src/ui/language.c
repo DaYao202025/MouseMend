@@ -100,7 +100,6 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_VERDICT_BLOCK_RELEASE] = L"swallow",
 	[STR_VERDICT_BLOCK_REVERSE] = L"reverse",
 	[STR_VERDICT_DEFER_RELEASE] = L"hold",
-	[STR_VERDICT_PASS_FLUSHED] = L"ok+release",
 	[STR_VERDICT_IGNORE_INJECTED] = L"simulated",
 	[STR_VERDICT_IGNORE_UNMONITORED] = L"unprotected",
 	[STR_VERDICT_IGNORE_WHEEL_ZERO] = L"no scroll",
@@ -202,6 +201,27 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_VERSION_NOTES_TEXT] =
 		L"Only published versions are listed, newest first.\n"
 		L"\n"
+		L"2.4.1  The status row is five square status lights now, one per module, each\n"
+		L"       with its own hue. Hovering a block opens it to the right in a tenth of\n"
+		L"       a second; the first block stays open at rest. Fixed: self-learning\n"
+		L"       could advise a threshold that then swallowed a working double click;\n"
+		L"       adopting could bypass the 50% limit; rules migrated from an older\n"
+		L"       version were lost on the next launch; switching to an empty whitelist\n"
+		L"       silently turned filtering off.\n"
+		L"\n"
+		L"2.4.0  Three new features and a round of fixes. Self-learning watches your\n"
+		L"       own double clicks and suggests a threshold per button; nothing is\n"
+		L"       changed until you adopt it, and every suggestion states how many\n"
+		L"       samples it came from. Whitelist and blacklist mode let you filter\n"
+		L"       only some programs, or skip the ones that chatter. The menu applies\n"
+		L"       the program you were just in with one click, and switches to the\n"
+		L"       matching mode so the rule actually takes effect. Windows processes\n"
+		L"       that can never be in front are refused; shell hosts warn first.\n"
+		L"       Fixes: the file dialog opened behind the check-up window; a list\n"
+		L"       edit did not apply until you switched windows; \"adopt all\" could\n"
+		L"       be clickable with no suggestion behind it; a pause could not be\n"
+		L"       undone from the same menu entry.\n"
+		L"\n"
 		L"2.3.0  Fixed the button sticking to the pointer. A release held back by\n"
 		L"       Smart Drag could be handed back together with a replay of the\n"
 		L"       press that followed it - and on a chattering switch that press IS\n"
@@ -256,6 +276,70 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 		L"       broke in the middle.",
 
 	[STR_HELP_CLOSE] = L"Close",
+	[STR_LEARNING] = L"Self-learning thresholds",
+	[STR_ADOPT_LEARNING] = L"Adopt all learning suggestions",
+	[STR_LEARNING_STATUS_FMT] = L"Learning: L %u / R %u / M %u ms (%u samples)",
+	[STR_PAUSE_CONTEXT] = L"Pause filtering for 5 minutes",
+	[STR_RESUME_CONTEXT] = L"Resume filtering (paused)",
+	[STR_EXCLUDE_CURRENT] = L"Exclude / include the current program",
+	[STR_CONTEXT_STATUS_FMT] = L"Current program: %s",
+
+	[STR_WHITELIST_MODE] = L"Whitelist mode",
+	[STR_BLACKLIST_MODE] = L"Blacklist mode",
+	[STR_CONTEXT_MODE_ALL_WHITE] = L"Off - whitelist inactive",
+	[STR_CONTEXT_MODE_ALL_BLACK] = L"Off - blacklist inactive",
+	[STR_CONTEXT_MODE_WHITELIST] = L"Filter only these programs",
+	[STR_CONTEXT_MODE_BLACKLIST] = L"Do not filter these programs",
+	[STR_CONTEXT_ADD] = L"Add program...",
+	[STR_CONTEXT_EXCLUDE_FMT] = L"Don't filter %s",
+	[STR_CONTEXT_ONLY_FMT] = L"Filter only %s",
+	[STR_CONTEXT_EMPTY] = L"No programs added",
+	[STR_CONTEXT_WHITE_EMPTY_WARN] = L"Empty: no program is protected",
+	[STR_CONTEXT_LEGACY_FMT] = L"%s (legacy rule)",
+	[STR_CONTEXT_MIGRATED_FMT] = L"%u rule(s) migrated from an older version",
+	[STR_CONTEXT_DELAY] = L"Takes effect immediately",
+	[STR_CONTEXT_ADD_TITLE] = L"Select the program to add",
+	[STR_CONTEXT_ADDED_FMT] = L"%s added to the %s.",
+	[STR_CONTEXT_ERR_SELF] = L"MouseMend itself cannot be added.",
+	[STR_CONTEXT_ERR_DUP] = L"That program is already on this list.",
+	[STR_CONTEXT_ERR_OTHER] = L"That program is on the other list. Remove it there first.",
+	[STR_CONTEXT_ERR_FULL] = L"The list is full (16 programs).",
+	[STR_CONTEXT_ERR_INVALID] = L"This file cannot be added.",
+	[STR_CONTEXT_ERR_RESERVED] = L"%s is a Windows system process. It never owns a foreground window, so this rule would do nothing.",
+	[STR_CONTEXT_WARN_SHELL] = L"%s hosts the desktop, the taskbar or UWP apps.\n\nOne rule here covers that whole surface. Add it anyway?",
+	[STR_CONFIRM_EMPTY_WHITELIST] =
+		L"The whitelist is empty.\n\n"
+		L"Switching to \"only these programs\" means every program is let through, "
+		L"which turns filtering off entirely.\n\n"
+		L"Switch anyway?",
+	[STR_CONTEXT_REMOVE_FMT] = L"Remove this program?\n\n%s",
+	[STR_CONTEXT_DISABLED_SUFFIX] = L" (inactive)",
+	[STR_WHITELIST_NAME] = L"whitelist",
+	[STR_BLACKLIST_NAME] = L"blacklist",
+	[STR_LEARNING_ENABLE] = L"Enable self-learning",
+	[STR_LEARNING_OFF_HINT] = L"Turn it on to start sampling",
+	[STR_LEARNING_ROW_PENDING_FMT] = L"%s  —  %u",
+	[STR_LEARNING_KEY_FMT] = L"%s  %u->%u  %u",
+	[STR_CAP_HOOK] = L"Hook",
+	[STR_CAP_LEARNING] = L"Learn",
+	[STR_CAP_CONTEXT] = L"List",
+	[STR_CAP_LOG] = L"Log",
+	[STR_CAP_STATE_OK] = L"working",
+	[STR_CAP_STATE_UNKNOWN] = L"no data",
+	[STR_CAP_STATE_STALLED] = L"stopped",
+	[STR_CAP_STATE_DISABLED] = L"off",
+	[STR_CAP_TIP_FMT] = L"%s: %s",
+	[STR_CAP_LABEL_FMT] = L"%s %s",
+	[STR_STATUS_SHORT_OK] = L"Protected",
+	[STR_STATUS_SHORT_BAD] = L"Not protected",
+	[STR_STATUS_STRIP_OK] = L"Mouse protection on",
+	[STR_STATUS_STRIP_BAD] = L"Protection problem",
+	[STR_STATUS_SHORT_STRIP] = L"P",
+	[STR_CAP_SHORT_HOOK] = L"H",
+	[STR_CAP_SHORT_LEARNING] = L"L",
+	[STR_CAP_SHORT_CONTEXT] = L"R",
+	[STR_CAP_SHORT_LOG] = L"G",
+	[STR_LEARNING_APPLIED_FMT] = L"Learning applied: %s",
 };
 
 // Simplified Chinese strings
@@ -350,7 +434,6 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_VERDICT_BLOCK_RELEASE] = L"拦截：松手",
 	[STR_VERDICT_BLOCK_REVERSE] = L"拦截：回跳",
 	[STR_VERDICT_DEFER_RELEASE] = L"推迟松手",
-	[STR_VERDICT_PASS_FLUSHED] = L"通过+补发",
 	[STR_VERDICT_IGNORE_INJECTED] = L"程序模拟",
 	[STR_VERDICT_IGNORE_UNMONITORED] = L"此键未防护",
 	[STR_VERDICT_IGNORE_WHEEL_ZERO] = L"滚轮无位移",
@@ -446,6 +529,20 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_VERSION_NOTES_TEXT] =
 		L"只列公开发布过的版本，新的在上面。\n"
 		L"\n"
+		L"2.4.1  状态行改成五盏方块状态灯，每个模块一种颜色。鼠标移上去，那一块在\n"
+		L"       十分之一秒内向右展开；第一个块在静止时常开。修复：自学习可能建议出\n"
+		L"       一个会把正常双击吞掉的阈值；「采用」能绕过自己的 50% 限幅；从旧版\n"
+		L"       迁移来的名单规则在下次启动时丢失；白名单为空时切过去会静默关闭过滤。\n"
+		L"\n"
+		L"2.4.0  三个新功能，外加一轮修复。自学习观察你自己的双击，按每个按键给\n"
+		L"       出阈值建议；不采纳就不改动任何设置，每条建议都会标出样本数。\n"
+		L"       白名单和黑名单可以「只在这些程序里拦截」或「这些程序不拦截」，\n"
+		L"       菜单里一键就能把刚才用的程序加进去，并自动切到对应的模式，规则\n"
+		L"       才会真的生效。永远不会出现在前台的 Windows 系统进程会被直接\n"
+		L"       拒绝；桌面与 UWP 宿主在添加前会先说明影响范围。\n"
+		L"       修复：体检窗口开着时文件框弹在它后面；改了名单要切窗口才生效；\n"
+		L"       没有建议时「采用」仍可点击；暂停之后无法从同一处撤销。\n"
+		L"\n"
 		L"2.3.0  修复「按键粘住鼠标」。智能拖拽扣住的松手，可能和紧随其后的按下\n"
 		L"       一起补发；对抖动的开关来说，那个按下就是抖动本身，等于替你重新\n"
 		L"       按住，直到再点一次才松开。现在重放已删除、被扣住的松手不会再丢，\n"
@@ -486,6 +583,69 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 		L"2.0.0  第一个公开版本：修双击、滚轮回跳、拖拽断触。",
 
 	[STR_HELP_CLOSE] = L"关闭",
+	[STR_LEARNING] = L"自学习阈值（需手动采用）",
+	[STR_ADOPT_LEARNING] = L"采用全部学习建议",
+	[STR_LEARNING_STATUS_FMT] = L"学习：左 %u / 右 %u / 中 %u ms（%u 样本）",
+	[STR_PAUSE_CONTEXT] = L"暂停过滤 5 分钟",
+	[STR_RESUME_CONTEXT] = L"恢复过滤（已暂停）",
+	[STR_EXCLUDE_CURRENT] = L"排除 / 取消排除当前程序",
+	[STR_CONTEXT_STATUS_FMT] = L"当前程序：%s",
+
+	[STR_WHITELIST_MODE] = L"白名单模式",
+	[STR_BLACKLIST_MODE] = L"黑名单模式",
+	[STR_CONTEXT_MODE_ALL_WHITE] = L"关闭 — 白名单不生效",
+	[STR_CONTEXT_MODE_ALL_BLACK] = L"关闭 — 黑名单不生效",
+	[STR_CONTEXT_MODE_WHITELIST] = L"只在白名单程序里拦截",
+	[STR_CONTEXT_MODE_BLACKLIST] = L"黑名单程序不拦截",
+	[STR_CONTEXT_ADD] = L"添加程序…",
+	[STR_CONTEXT_EXCLUDE_FMT] = L"不拦截 %s",
+	[STR_CONTEXT_ONLY_FMT] = L"只对 %s 生效",
+	[STR_CONTEXT_EMPTY] = L"尚未添加程序",
+	[STR_CONTEXT_WHITE_EMPTY_WARN] = L"名单为空：所有程序都不拦截",
+	[STR_CONTEXT_LEGACY_FMT] = L"%s（旧版规则）",
+	[STR_CONTEXT_MIGRATED_FMT] = L"已从旧版迁移 %u 条规则",
+	[STR_CONTEXT_DELAY] = L"改动立即生效",
+	[STR_CONTEXT_ADD_TITLE] = L"选择要添加的程序",
+	[STR_CONTEXT_ADDED_FMT] = L"已把 %s 添加到%s。",
+	[STR_CONTEXT_ERR_SELF] = L"不能添加本程序。",
+	[STR_CONTEXT_ERR_DUP] = L"该程序已在这个名单中。",
+	[STR_CONTEXT_ERR_OTHER] = L"该程序已在另一个名单中，请先在那里移除。",
+	[STR_CONTEXT_ERR_FULL] = L"名单已满（16 个程序）。",
+	[STR_CONTEXT_ERR_INVALID] = L"无法添加这个文件。",
+	[STR_CONTEXT_ERR_RESERVED] = L"%s 是 Windows 系统进程，永远不会出现在前台，这条规则不会有任何效果。",
+	[STR_CONTEXT_WARN_SHELL] = L"%s 承载桌面、任务栏或 UWP 应用。\n\n一条规则会影响这一整类场景，仍要添加吗？",
+	[STR_CONFIRM_EMPTY_WHITELIST] =
+		L"白名单里还没有程序。\n\n"
+		L"切到「只在白名单程序里拦截」后，所有程序都会被放行，等于完全关闭过滤。\n\n"
+		L"仍要切换吗？",
+	[STR_CONTEXT_REMOVE_FMT] = L"要移除这个程序吗？\n\n%s",
+	[STR_CONTEXT_DISABLED_SUFFIX] = L"（未启用）",
+	[STR_WHITELIST_NAME] = L"白名单",
+	[STR_BLACKLIST_NAME] = L"黑名单",
+	[STR_LEARNING_ENABLE] = L"启用自学习",
+	[STR_LEARNING_OFF_HINT] = L"开启后开始采样",
+	[STR_LEARNING_ROW_PENDING_FMT] = L"%s  —  %u",
+	[STR_LEARNING_KEY_FMT] = L"%s  %u→%u  %u",
+	[STR_CAP_HOOK] = L"钩子",
+	[STR_CAP_LEARNING] = L"学习",
+	[STR_CAP_CONTEXT] = L"名单",
+	[STR_CAP_LOG] = L"日志",
+	[STR_CAP_STATE_OK] = L"正常",
+	[STR_CAP_STATE_UNKNOWN] = L"待数据",
+	[STR_CAP_STATE_STALLED] = L"未工作",
+	[STR_CAP_STATE_DISABLED] = L"未启用",
+	[STR_CAP_TIP_FMT] = L"%s：%s",
+	[STR_CAP_LABEL_FMT] = L"%s %s",
+	[STR_STATUS_SHORT_OK] = L"防护中",
+	[STR_STATUS_SHORT_BAD] = L"未防护",
+	[STR_STATUS_STRIP_OK] = L"鼠标防护中",
+	[STR_STATUS_STRIP_BAD] = L"鼠标防护异常",
+	[STR_STATUS_SHORT_STRIP] = L"防",
+	[STR_CAP_SHORT_HOOK] = L"钩",
+	[STR_CAP_SHORT_LEARNING] = L"学",
+	[STR_CAP_SHORT_CONTEXT] = L"名",
+	[STR_CAP_SHORT_LOG] = L"志",
+	[STR_LEARNING_APPLIED_FMT] = L"已采用学习建议：%s",
 };
 
 // Button names, indexed by MouseButton

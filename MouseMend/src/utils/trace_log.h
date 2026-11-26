@@ -43,7 +43,7 @@ const wchar_t *trace_path(void);
 // One button event: what arrived, what the engine decided, and what Windows
 // believes about the button immediately afterwards.
 void trace_button(int button, bool is_down, bool injected, int x, int y,
-				  const char *verdict, bool swallowed, bool replayed);
+				  const char *verdict, bool swallowed);
 
 // Pointer movement, sampled inside this module so the hook stays cheap
 void trace_move(int x, int y);
@@ -60,10 +60,10 @@ static __inline void trace_stop(void) {}
 static __inline bool trace_active(void) { return false; }
 
 static __inline void trace_button(int button, bool is_down, bool injected, int x, int y,
-								  const char *verdict, bool swallowed, bool replayed)
+								  const char *verdict, bool swallowed)
 {
 	(void)button; (void)is_down; (void)injected; (void)x; (void)y;
-	(void)verdict; (void)swallowed; (void)replayed;
+	(void)verdict; (void)swallowed;
 }
 
 static __inline void trace_move(int x, int y) { (void)x; (void)y; }

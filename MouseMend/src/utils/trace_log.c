@@ -98,10 +98,10 @@ static void format_record(const TraceRecord *record)
 		uint32_t f = record->flags;
 
 		fprintf(g_file,
-				"E %10I64u %-6s %-4s pos=%5d,%5d verdict=%-18s sw=%u rp=%u inj=%u "
+				"E %10I64u %-6s %-4s pos=%5d,%5d verdict=%-18s sw=%u inj=%u "
 				"| lbtn=%u cap=%s fg=%s hit=%s fgrect=%d,%d,%dx%d\n",
 				record->t_us, name, (f & 1) ? "down" : "up", record->x, record->y,
-				record->verdict, (f & 4) ? 1u : 0u, (f & 8) ? 1u : 0u, (f & 2) ? 1u : 0u,
+				record->verdict, (f & 4) ? 1u : 0u, (f & 2) ? 1u : 0u,
 				(f & 16) ? 1u : 0u,
 				(f & 32) ? "ours" : "other",
 				(f & 64) ? "ours" : "other",
@@ -197,7 +197,7 @@ bool trace_start(void)
 		return false;
 
 	fprintf(g_file, "# MouseMend trace, built %s %s\n", __DATE__, __TIME__);
-	fprintf(g_file, "# E=button M=move I=injection L=lifecycle   sw=swallowed rp=replayed\n");
+	fprintf(g_file, "# E=button M=move I=injection L=lifecycle   sw=swallowed\n");
 	fprintf(g_file, "# lbtn/cap/fg/hit are sampled right after the decision\n");
 
 	LARGE_INTEGER frequency, counter;
@@ -263,7 +263,7 @@ const wchar_t *trace_path(void)
 }
 
 void trace_button(int button, bool is_down, bool injected, int x, int y,
-				  const char *verdict, bool swallowed, bool replayed)
+				  const char *verdict, bool swallowed)
 {
 	if (!tracing())
 		return;
@@ -283,7 +283,6 @@ void trace_button(int button, bool is_down, bool injected, int x, int y,
 	HWND hit = WindowFromPoint(point);
 
 	record.flags = (is_down ? 1u : 0u) | (injected ? 2u : 0u) | (swallowed ? 4u : 0u) |
-				   (replayed ? 8u : 0u) |
 				   ((GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? 16u : 0u) |
 				   (window_is_ours(capture) ? 32u : 0u) |
 				   (window_is_ours(foreground) ? 64u : 0u) |

@@ -20,7 +20,7 @@ static void capture_hang(void)
 {
 	static SupportReport report;
 
-	wchar_t dump[MAX_PATH];
+	static wchar_t dump[SUPPORT_PATH_CHARS];
 	bool have_dump = crash_dump_write_current(dump, ARRAYSIZE(dump));
 
 	if (g_collector)
@@ -30,7 +30,7 @@ static void capture_hang(void)
 
 	report.hung = true;
 
-	wchar_t bundle[MAX_PATH];
+	static wchar_t bundle[SUPPORT_PATH_CHARS];
 	if (support_bundle_write(&report, have_dump ? dump : NULL, bundle, ARRAYSIZE(bundle)))
 	{
 		if (have_dump)

@@ -18,7 +18,7 @@
 // Time base for all synthetic events
 static uint64_t g_base = 0;
 
-// Recorded injections, so the replay can be asserted without clicking anything
+// Recorded injections, so a deferred release can be asserted without clicking anything
 static INPUT g_injected[4];
 static int g_injected_count = 0;
 
@@ -60,9 +60,6 @@ static void reset_state(DebounceManager *manager)
 		manager->buttons[i].downTime = 0;
 		manager->buttons[i].isBlocked = false;
 		manager->buttons[i].isDeferringRelease = false;
-		manager->buttons[i].pending_replay = false;
-		manager->buttons[i].replay_in_flight = false;
-		manager->buttons[i].release_after_replay = false;
 		manager->buttons[i].wheelDirection = 0;
 		manager->buttons[i].system_down = false;
 		manager->buttons[i].deferArmedUntil = g_base + DEBOUNCE_CHATTER_ARM_MS;
@@ -175,7 +172,6 @@ void test_smart_drag_run(void)
 	CHECK(debounce_process_event(&manager, &drag_down2));
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 	CHECK(debounce_has_pending_deferrals(&manager));
-	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
 
 	// Nothing may be injected from this stack - it is the hook's
 	CHECK(g_injected_count == 0);
@@ -478,22 +474,21 @@ void test_smart_drag_run(void)
 	reset_state(&manager);
 	debounce_set_defer_available(&manager, true);
 
-	MouseEvent replay_down = make_event(MOUSE_BUTTON_LEFT, 20000, true, 100, 100, 0);
-	MouseEvent replay_up = make_event(MOUSE_BUTTON_LEFT, 20300, false, 140, 100, 0);
-	MouseEvent replay_press = make_event(MOUSE_BUTTON_LEFT, 20340, true, 140, 100, 0);
+	MouseEvent late_chatter_down = make_event(MOUSE_BUTTON_LEFT, 20000, true, 100, 100, 0);
+	MouseEvent late_chatter_up = make_event(MOUSE_BUTTON_LEFT, 20300, false, 140, 100, 0);
+	MouseEvent late_chatter_press = make_event(MOUSE_BUTTON_LEFT, 20340, true, 140, 100, 0);
 
-	CHECK(!debounce_process_event(&manager, &replay_down));
-	CHECK(debounce_process_event(&manager, &replay_up));
+	CHECK(!debounce_process_event(&manager, &late_chatter_down));
+	CHECK(debounce_process_event(&manager, &late_chatter_up));
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 
 	// Blocked, and the release is still owed to the system
-	CHECK(debounce_process_event(&manager, &replay_press));
+	CHECK(debounce_process_event(&manager, &late_chatter_press));
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
-	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
 
 	// Its own release is a stray one and delays nothing
-	MouseEvent replay_release = make_event(MOUSE_BUTTON_LEFT, 20350, false, 100, 100, 0);
-	CHECK(!debounce_process_event(&manager, &replay_release));
+	MouseEvent late_chatter_release = make_event(MOUSE_BUTTON_LEFT, 20350, false, 100, 100, 0);
+	CHECK(!debounce_process_event(&manager, &late_chatter_release));
 	CHECK(debounce_has_pending_work(&manager));
 
 	// The timer delivers that release and nothing else
@@ -527,17 +522,17 @@ void test_smart_drag_run(void)
 	g_injected_count = 0;
 
 	// Long and moved, so this release is held back
-	MouseEvent replay2_down = make_event(MOUSE_BUTTON_LEFT, 22000, true, 300, 200, 0);
-	MouseEvent replay2_up = make_event(MOUSE_BUTTON_LEFT, 22300, false, 340, 200, 0);
-	MouseEvent replay2_press = make_event(MOUSE_BUTTON_LEFT, 22340, true, 305, 205, 0);
+	MouseEvent drag2_down = make_event(MOUSE_BUTTON_LEFT, 22000, true, 300, 200, 0);
+	MouseEvent drag2_up = make_event(MOUSE_BUTTON_LEFT, 22300, false, 340, 200, 0);
+	MouseEvent drag2_press = make_event(MOUSE_BUTTON_LEFT, 22340, true, 305, 205, 0);
 
-	CHECK(!debounce_process_event(&manager, &replay2_down));
-	CHECK(debounce_process_event(&manager, &replay2_up));
+	CHECK(!debounce_process_event(&manager, &drag2_down));
+	CHECK(debounce_process_event(&manager, &drag2_up));
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 
 	// The press is swallowed here and stays swallowed: nothing may be injected
 	// from this stack, it is the one the hook callback runs on.
-	CHECK(debounce_process_event(&manager, &replay2_press));
+	CHECK(debounce_process_event(&manager, &drag2_press));
 	CHECK(g_injected_count == 0);
 
 	// The timer owes one UP. A DOWN here is what kept a window following the

@@ -26,11 +26,19 @@
 #include "src/core/notify_policy.h"
 #include "src/core/settings.h"
 #include "src/core/app_controller.h"
+#include "src/core/command_classify.h"
 #include "src/core/app_snapshot.h"
 #include "src/core/event_trace.h"
 #include "src/core/event_history.h"
 #include "src/core/block_log.h"
 #include "src/core/hook_watchdog.h"
+#include "src/core/learning_service.h"
+#include "src/core/context_filter.h"
+#include "src/core/context_service.h"
+#include "src/core/context_store.h"
+#include <commdlg.h>
+
+#pragma comment(lib, "comdlg32.lib")
 #include "src/ui/tray_icon.h"
 #include "src/ui/context_menu.h"
 #include "src/ui/input_box.h"
@@ -101,6 +109,13 @@ typedef struct
 	uint32_t hook_recoveries;
 	bool state_msg_pending;
 
+	// Opt-in self-learning: the hook only writes the ring; a background thread
+	// reads it and publishes a suggestion snapshot for the tray menu.
+	SignalRing signals;
+	LearningService learning;
+	ContextFilter context_filter;
+	ContextService context_service;
+
 	// Blocked-click notification state
 	uint64_t notify_last_tick;
 	uint32_t notify_reported_blocks;
@@ -120,6 +135,11 @@ typedef struct
 	// Time of the last left click on the tray icon, so a second click within the
 	// system double click time opens the window and a single click does nothing.
 	uint64_t tray_last_select_tick;
+
+	// Menu commands that arrived with no group claiming them. Counted in release
+	// builds too: "this entry does nothing" is a user report, and a counter is
+	// the only thing that can confirm it happened.
+	volatile LONG unhandled_menu_ids;
 } AppState;
 
 static AppState g_app = {0};
@@ -155,6 +175,9 @@ static void ShutdownApp(void);
 static void ShowContextMenu(const HWND hWnd, const int x, const int y);
 static void UpdateTrayTooltip(void);
 static void CDECL ShowErrorMessageBox(LPCWSTR message, ...);
+
+// Declared early: export handlers defined above the helper still need it.
+static HWND UiDialogOwner(void);
 static void ToggleEnableAll(void);
 static void ToggleButton(MouseButton button);
 static void ToggleHybridHeuristic(void);
@@ -176,6 +199,8 @@ static void BuildSnapshot(AppSnapshot *snapshot, void *user);
 static bool SaveSink(const DebounceManager *debounce, const Preferences *prefs, void *user);
 static void ResetStatsSink(void *user);
 static void ObserverSink(void *user);
+static void RemoveContextPath(ContextMode list, uint32_t index);
+static void PromptAddContextPath(ContextMode list);
 
 // Poll the physical state of the mouse buttons that can trigger a block
 // GetAsyncKeyState works without a hook, so it is the evidence used to prove that
@@ -225,6 +250,23 @@ static void EnsureSmartDragTimer(void)
 	debounce_set_defer_available(&g_app.debounce, false);
 }
 
+// Threshold provider for the learning service.
+//
+// Reads the engine's field directly on purpose. DebounceManager's public
+// accessors take the engine's critical section, and the worker asks for seven
+// thresholds on every poll - going through them would put it in contention with
+// the hook thread a hundred times a second. The engine is the only writer, and
+// a uint32_t read is atomic, so a plain field read is both safe and correct.
+static uint32_t LearningThresholdFor(int button, void *user)
+{
+	const AppState *app = (const AppState *)user;
+
+	if (!app || button < 0 || button >= MOUSE_BUTTON_COUNT)
+		return 0;
+
+	return app->debounce.buttons[button].thresholdMs;
+}
+
 // Mouse hook callback
 static LRESULT CALLBACK OnMouseHookCallback(const MouseEvent *event, void *user_data)
 {
@@ -245,14 +287,49 @@ static LRESULT CALLBACK OnMouseHookCallback(const MouseEvent *event, void *user_
 	// Process event directly - avoid creating intermediate structure
 	// The explanation is kept because the check-up window renders the engine's
 	// own verdict instead of repeating the rules somewhere else.
+	// One atomic read of the published slot; no process/window API on this stack.
+	bool suppress = context_filter_should_suppress(&app->context_filter.snap, event->timestamp);
 	DebounceDecision decision;
-	bool blocked = debounce_process_event_ex(&app->debounce, event, &decision);
+	bool blocked = debounce_process_event_ex_suppressed(&app->debounce, event, &decision, suppress);
+
+	// Opt-in learning: one Interlocked increment, no lock, no allocation, no API
+	// call. elapsed_ms is the exact quantity the threshold compared, so the
+	// learned distribution cannot drift away from the decision it explains.
+	//
+	// Only a press that was actually blocked is sampled.
+	//
+	// Sampling every fast press inside a fixed window fixed one problem (the
+	// histogram used to describe the threshold instead of the switch) and created
+	// a worse one: a normal 55 ms double click under a 50 ms threshold passes,
+	// still gets sampled, and pulls the advice up to 56 - adopting it would then
+	// start swallowing those very clicks. "It worked until I turned on
+	// self-learning" is the worst possible outcome for this feature.
+	//
+	// A blocked press is the only evidence that matters: the user lost a click,
+	// and the advice answers "how much higher would have absorbed it". A press
+	// that passed produced no complaint, so there is nothing to learn from it.
+	// The window is still fixed at 64 ms, so the distribution never depends on
+	// the current threshold.
+	//
+	// A zero gap is a real sample, not a missing one: GetTickCount64 advances in
+	// roughly 15.6 ms steps, so a 5 ms chatter almost always lands in the same
+	// tick as the release before it. Dropping those samples threw away the most
+	// certain chatter there is. Only the very first press has no gap at all, and
+	// that one is excluded by first_event rather than by the value.
+	if (app->prefs.learning_enabled && blocked && event->is_down && !event->is_injected &&
+		decision.reason != DEBOUNCE_REASON_IGNORE_INJECTED &&
+		decision.reason != DEBOUNCE_REASON_IGNORE_UNMONITORED &&
+		!decision.first_event &&
+		decision.elapsed_ms <= (uint64_t)SIGNAL_RING_SAMPLE_MAX_MS)
+	{
+		signal_ring_note_interval(&app->signals, event->button, decision.elapsed_ms);
+	}
 
 	// Trace build only: what arrived, what was decided, and what Windows thinks
 	// about the button a moment later. That last part is the whole point - it is
 	// the difference between "we let it through" and "the system saw it".
 	trace_button(event->button, event->is_down, event->is_injected, event->x, event->y,
-				 debounce_reason_slug(decision.reason), blocked, decision.replay);
+				 debounce_reason_slug(decision.reason), blocked);
 
 	// Record the decision for the check-up window. Memory only: the hook has to
 	// return within its budget or Windows silently removes it.
@@ -294,12 +371,6 @@ static LRESULT CALLBACK OnMouseHookCallback(const MouseEvent *event, void *user_
 	// on the release, so the engine only ever holds one it is able to return.
 	if (event->is_down && !event->is_injected)
 		EnsureSmartDragTimer();
-
-	// A replayed press is swallowed as well, but it is not a blocked false click:
-	// no log line, no balloon, no evidence entry. The timer delivers it back
-	// right behind the release that was held in front of it.
-	if (decision.replay)
-		return 1;
 
 	if (blocked)
 	{
@@ -449,11 +520,11 @@ static void NotifyBlockedClick(void)
 // process is not the application directory.
 static void BuildLogPath(wchar_t *path, size_t path_count)
 {
-	wchar_t local_app_data[MAX_PATH] = {0};
+	wchar_t local_app_data[SUPPORT_PATH_CHARS] = {0};
 
 	if (GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data, ARRAYSIZE(local_app_data)) > 0)
 	{
-		wchar_t directory[MAX_PATH];
+		wchar_t directory[SUPPORT_PATH_CHARS];
 		StringCchPrintfW(directory, ARRAYSIZE(directory), L"%s\\%s", local_app_data, LOG_DIRECTORY_NAME);
 		CreateDirectoryW(directory, NULL);
 
@@ -565,25 +636,25 @@ static void ExportSupportBundle(void)
 
 	CollectSupportReport(&report);
 
-	wchar_t path[MAX_PATH];
+	wchar_t path[SUPPORT_PATH_CHARS];
 	bool written = support_bundle_write(&report, NULL, path, ARRAYSIZE(path));
 
 	if (!written)
 	{
-		MessageBoxW(g_app.hWnd, lang_str(STR_EXPORT_SUPPORT_FAILED), APP_NAME_W,
+		MessageBoxW(UiDialogOwner(), lang_str(STR_EXPORT_SUPPORT_FAILED), APP_NAME_W,
 					MB_OK | MB_ICONWARNING);
 		return;
 	}
 
 	wchar_t text[TRAY_BALLOON_MAX_CHARS * 2];
 	StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_EXPORT_SUPPORT_DONE_FMT), path);
-	MessageBoxW(g_app.hWnd, text, APP_NAME_W, MB_OK | MB_ICONINFORMATION);
+	MessageBoxW(UiDialogOwner(), text, APP_NAME_W, MB_OK | MB_ICONINFORMATION);
 }
 
 // Tell the user, once, that the previous run left a report behind
 static void NotifyPreviousCrash(void)
 {
-	wchar_t path[MAX_PATH];
+	wchar_t path[SUPPORT_PATH_CHARS];
 	LangStringId message = STR_CRASH_REPORT_FOUND_FMT;
 
 	// A hang is reported in preference to a crash: it is the case where the
@@ -598,7 +669,7 @@ static void NotifyPreviousCrash(void)
 		return;
 	}
 
-	wchar_t notified[MAX_PATH];
+	wchar_t notified[SUPPORT_PATH_CHARS];
 	ReadLastCrashNotice(notified, ARRAYSIZE(notified));
 
 	if (notified[0] != L'\0' && wcscmp(notified, path) == 0)
@@ -619,7 +690,7 @@ static bool InitializeApp(void)
 {
 #ifndef NDEBUG
 	// Initialize logger (only in Debug mode)
-	wchar_t log_path[MAX_PATH];
+	wchar_t log_path[SUPPORT_PATH_CHARS];
 	BuildLogPath(log_path, ARRAYSIZE(log_path));
 
 	if (!logger_init(&g_app.logger, LOG_LEVEL_INFO, log_path))
@@ -689,6 +760,11 @@ static bool InitializeApp(void)
 	if (block_log_init(&g_app.log_queue))
 		g_app.log_queue_ready = true;
 
+	signal_ring_init(&g_app.signals);
+	context_filter_init(&g_app.context_filter);
+	context_store_load(&g_app.context_filter.policy);
+	app_controller_attach_context(&g_app.controller, &g_app.context_filter);
+
 	hook_watchdog_init(&g_app.watchdog);
 	GetCursorPos(&g_app.watchdog_cursor);
 
@@ -717,6 +793,18 @@ static bool InitializeApp(void)
 
 	// Start watching for a hang. Before this point the message loop has never
 	// run, so a heartbeat would be missing for a reason that is not a hang.
+	// Self-learning is opt-in. The service is cheap when disabled and keeps the
+	// hook free of all aggregation: the callback only increments two counters.
+	if (g_app.prefs.learning_enabled &&
+		!learning_service_start(&g_app.learning, &g_app.signals, LearningThresholdFor, &g_app))
+	{
+		g_app.prefs.learning_enabled = false;
+	}
+
+	// Rule table is empty by default, so this thread only publishes "not
+	// excluded" until the user adds a rule. It never blocks the hook thread.
+	context_service_start(&g_app.context_service, &g_app.context_filter);
+
 	if (!hang_watchdog_start(CollectSupportReport))
 	{
 #ifndef NDEBUG
@@ -857,6 +945,11 @@ static void ShutdownApp(void)
 		KillTimer(g_app.hWnd, TIMER_STATE);
 	}
 
+	// Stop the learning service before the debounce manager it reads. Bounded
+	// internally, and still inside the hang watchdog's coverage window.
+	learning_service_stop(&g_app.learning);
+	context_service_stop(&g_app.context_service);
+
 	// Stop watching before anything it reads is torn down. Bounded internally:
 	// a shutdown must never wait on the watchdog.
 	hang_watchdog_stop();
@@ -876,16 +969,10 @@ static void ShutdownApp(void)
 	g_app.notify_requested = false;
 	g_app.log_flush_requested = false;
 
-	// Release any release that is still held back, otherwise the button would
-	// stay logically pressed after this process is gone. A press that was queued
-	// for replay is dropped instead of being delivered into a dying window, but
-	// the release it was holding is given back first - that release is the only
-	// thing standing between the user and a button stuck down.
+	// Release anything still held back, otherwise the button would stay
+	// logically pressed after this process is gone.
 	if (g_app.debounce_ready)
-	{
-		debounce_drop_replays(&g_app.debounce);
 		debounce_flush_deferred_releases(&g_app.debounce);
-	}
 
 	// Remove tray icon
 	if (g_app.tray_ready)
@@ -951,9 +1038,14 @@ static void SaveSettings(void)
 static bool SaveSink(const DebounceManager *debounce, const Preferences *prefs, void *user)
 {
 	static bool warning_shown = false;
-	(void)user;
+	AppState *app = (AppState *)user;
 
-	if (settings_save(debounce, prefs))
+	// The context policy lives outside Preferences, so one save covers both.
+	bool saved = settings_save(debounce, prefs);
+	if (app)
+		saved = context_store_save(&app->context_filter.policy) && saved;
+
+	if (saved)
 		return true;
 
 	if (!warning_shown && g_app.tray_ready)
@@ -963,6 +1055,150 @@ static bool SaveSink(const DebounceManager *debounce, const Preferences *prefs, 
 	}
 
 	return false;
+}
+
+// Owner for every dialog the user is supposed to see.
+//
+// The tray window is hidden at 0,0, so a dialog owned by it is technically fine
+// but has no visible parent to sit on top of. When the check-up window is open,
+// both it and the new dialog are owned by the same hidden window - they are
+// siblings, and Windows stacks a freshly created dialog *under* the visible one.
+// That is why "add a program" looked like it did nothing: the file dialog was
+// there, behind the check-up window. Owning the dialog to the visible window
+// also makes it modal to that window, which is what the user expects.
+static HWND UiDialogOwner(void)
+{
+	if (settings_window_is_visible(&g_app.settings))
+		return g_app.settings.hwnd;
+
+	return g_app.hWnd;
+}
+
+// Remove one entry, after a confirmation that shows the full path (the list
+// itself only shows the file name, which can be ambiguous).
+static void RemoveContextPath(ContextMode list, uint32_t index)
+{
+	// Static: a policy copy is ~65 KB and must not go on the stack.
+	static ContextPolicy policy;
+	context_filter_copy_policy(&g_app.context_filter, &policy);
+
+	const ContextPathList *paths = (list == CONTEXT_MODE_WHITELIST) ? &policy.whitelist
+																   : &policy.blacklist;
+	const wchar_t *path = context_path_list_at(paths, index);
+
+	if (!path || !path[0])
+		return;
+
+	wchar_t text[CONTEXT_PATH_CHARS + 128];
+	if (FAILED(StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_CONTEXT_REMOVE_FMT), path)))
+		return;
+
+	if (MessageBoxW(UiDialogOwner(), text, APP_NAME_W,
+					MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+		return;
+
+	if (app_controller_remove_context_path(&g_app.controller, list, path))
+		SaveSettings();
+}
+
+static void ShowContextAddResult(ContextMode list, const wchar_t *file_path, ContextAddResult result)
+{
+	if (result == CONTEXT_ADD_OK)
+	{
+		// Name the program too. "Added to the blacklist" never said what was
+		// added, and the one-click entry takes whatever was in front a moment
+		// ago - which may be explorer or a different window than the user meant.
+		wchar_t added[CONTEXT_NAME_CHARS] = {0};
+		context_file_name_from_path(file_path, added, ARRAYSIZE(added));
+
+		wchar_t text[256];
+		StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_CONTEXT_ADDED_FMT), added,
+						 lang_str(list == CONTEXT_MODE_WHITELIST ? STR_WHITELIST_NAME
+																 : STR_BLACKLIST_NAME));
+		MessageBoxW(UiDialogOwner(), text, APP_NAME_W, MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+
+	wchar_t name[CONTEXT_NAME_CHARS];
+	context_file_name_from_path(file_path, name, ARRAYSIZE(name));
+
+	if (result == CONTEXT_ADD_RESERVED)
+	{
+		wchar_t text[512];
+		if (SUCCEEDED(StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_CONTEXT_ERR_RESERVED), name)))
+			MessageBoxW(UiDialogOwner(), text, APP_NAME_W, MB_OK | MB_ICONWARNING);
+		return;
+	}
+
+	LangStringId message = STR_CONTEXT_ERR_INVALID;
+
+	switch (result)
+	{
+	case CONTEXT_ADD_SELF:
+		message = STR_CONTEXT_ERR_SELF;
+		break;
+	case CONTEXT_ADD_DUPLICATE:
+		message = STR_CONTEXT_ERR_DUP;
+		break;
+	case CONTEXT_ADD_IN_OTHER:
+		message = STR_CONTEXT_ERR_OTHER;
+		break;
+	case CONTEXT_ADD_FULL:
+		message = STR_CONTEXT_ERR_FULL;
+		break;
+	default:
+		break;
+	}
+
+	MessageBoxW(UiDialogOwner(), lang_str(message), APP_NAME_W, MB_OK | MB_ICONWARNING);
+}
+
+// Opens the system file dialog. Only reached from WM_APP_ADD_EXE_FILE, i.e.
+// after the menu has closed and its WM_NULL has been dispatched.
+static void PromptAddContextPath(ContextMode list)
+{
+	// Static: 2 KB of path plus the dialog structure, off the stack.
+	static wchar_t file[CONTEXT_PATH_CHARS];
+	file[0] = L'\0';
+
+	OPENFILENAMEW ofn;
+	memset(&ofn, 0, sizeof(ofn));
+	ofn.lStructSize = sizeof(ofn);
+	ofn.hwndOwner = UiDialogOwner();
+	ofn.lpstrFilter = L"Programs (*.exe)\0*.exe\0All files (*.*)\0*.*\0";
+	ofn.lpstrFile = file;
+	ofn.nMaxFile = ARRAYSIZE(file);
+	ofn.lpstrTitle = lang_str(STR_CONTEXT_ADD_TITLE);
+	ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_HIDEREADONLY;
+
+	if (!GetOpenFileNameW(&ofn))
+		return;
+
+	// Shell and UWP hosts are allowed on purpose: desktop chatter is a real
+	// problem. The rule just covers far more than the name suggests, so ask.
+	wchar_t name[CONTEXT_NAME_CHARS];
+	context_file_name_from_path(file, name, ARRAYSIZE(name));
+
+	if (context_program_is_shell(name))
+	{
+		wchar_t warning[512];
+		if (SUCCEEDED(StringCchPrintfW(warning, ARRAYSIZE(warning), lang_str(STR_CONTEXT_WARN_SHELL), name)))
+		{
+			if (MessageBoxW(UiDialogOwner(), warning, APP_NAME_W,
+							MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+				return;
+		}
+	}
+
+	ContextAddResult result = app_controller_add_context_path(&g_app.controller, list, file);
+
+	// Persist immediately. The controller's 400 ms debounce exists for slider
+	// drags; losing a list edit to a crash inside that window is not a trade-off
+	// worth making for a menu action. Adding and removing now behave the same.
+	if (result == CONTEXT_ADD_OK)
+		SaveSettings();
+
+	ShowContextAddResult(list, file, result);
 }
 
 // Statistics were cleared: the balloon baseline has to follow, otherwise the next
@@ -1182,6 +1418,46 @@ static void BuildSnapshot(AppSnapshot *snapshot, void *user)
 	snapshot->hook_active = IsHookActive();
 	snapshot->logging = app->prefs.log_blocks;
 
+	// Capability line: what is switched on, and whether it is actually working.
+	// This adapter is the only place that sees every module at once, so it is
+	// the only place that can answer "which part broke" instead of "protection
+	// is on" while a module sits dead behind it.
+	{
+		CapabilityInputs caps;
+		memset(&caps, 0, sizeof(caps));
+
+		caps.hook_ready = app->hook_ready;
+		caps.hook_installed = app->mouse_hook.installed;
+		caps.hook_healthy = hook_watchdog_is_healthy(&app->watchdog);
+
+		caps.learning_enabled = app->prefs.learning_enabled;
+		caps.learning_started = learning_service_is_started(&app->learning);
+
+		uint32_t samples = 0;
+		for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
+			samples += signal_ring_samples(&app->signals, i);
+		caps.learning_has_samples = samples > 0;
+
+		caps.context_active =
+			context_filter_get_mode(&app->context_filter) != CONTEXT_MODE_ALL;
+		caps.context_started = context_service_is_running(&app->context_service);
+		caps.context_paused = context_filter_is_paused(&app->context_filter, GetTickCount64());
+		caps.context_observed = app->context_service.observed != 0;
+
+		caps.log_enabled = app->prefs.log_blocks;
+		caps.log_ready = app->log_queue_ready;
+		caps.log_directory_resolved = app->log_directory[0] != L'\0';
+
+		CapabilityState states[CAP_COUNT];
+		app_capabilities_evaluate(&caps, states);
+
+		for (int i = 0; i < CAP_COUNT; i++)
+			snapshot->capabilities[i] = (uint8_t)states[i];
+
+		snapshot->unhandled_menu_ids =
+			(uint32_t)InterlockedCompareExchange(&app->unhandled_menu_ids, 0, 0);
+	}
+
 	StringCchCopyW(snapshot->log_directory, ARRAYSIZE(snapshot->log_directory), app->log_directory);
 }
 
@@ -1285,7 +1561,7 @@ static void ApplyPreset(const PresetConfig *preset, bool save)
 // Restore every setting to its default value
 static void RestoreDefaults(void)
 {
-	if (MessageBoxW(NULL, lang_str(STR_CONFIRM_RESTORE), lang_str(STR_APP_NAME),
+	if (MessageBoxW(UiDialogOwner(), lang_str(STR_CONFIRM_RESTORE), lang_str(STR_APP_NAME),
 					MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
 		return;
 
@@ -1298,6 +1574,11 @@ static void RestoreDefaults(void)
 	// Both history and notifications are opt-in, so defaults switch them off
 	app_controller_set_notify_blocks(&g_app.controller, false);
 	app_controller_set_log_blocks(&g_app.controller, false);
+	app_controller_set_learning(&g_app.controller, false);
+	app_controller_reset_context(&g_app.controller);
+	context_filter_set_pause(&g_app.context_filter, 0, 0);
+	learning_service_stop(&g_app.learning);
+	signal_ring_init(&g_app.signals);
 
 	g_app.notify_requested = false;
 	g_app.notify_last_tick = 0;
@@ -1422,6 +1703,400 @@ static bool RegisterInvisibleClass(const HINSTANCE hInstance)
 }
 
 // Window procedure
+// ---------------------------------------------------------------- commands ---
+//
+// WM_COMMAND used to hold every branch inline: app toggles, per-button
+// thresholds, program lists and learning shared one 305-line chain, so adding a
+// feature meant editing code that belonged to three unrelated ones. The four
+// handlers below give each area its own function, which bounds the blast radius
+// of any future change to one of them.
+//
+// They still live in this file on purpose: they drive AppState directly, and
+// SaveSettings / ShowContextAddResult / the Toggle* helpers are all local. The
+// AppState parameter is not decoration - a later move to another file becomes a
+// mechanical rename instead of a rewrite.
+
+static bool HandleMenuCommand(AppState *app, HWND hWnd, UINT menu_id)
+{
+	if (menu_id == IDM_ABOUT)
+	{
+		about_window_show(UiDialogOwner(), app->hInstance);
+		return true;
+	}
+	if (menu_id == IDM_EXIT)
+	{
+		PostMessage(hWnd, WM_CLOSE, 0, 0);
+		return true;
+	}
+	if (menu_id == IDM_TOGGLE_ENABLE)
+	{
+		ToggleEnableAll();
+		return true;
+	}
+	if (menu_id == IDM_TOGGLE_HYBRID)
+	{
+		ToggleHybridHeuristic();
+		return true;
+	}
+	if (menu_id == IDM_TOGGLE_AUTOSTART)
+	{
+		ToggleAutostart();
+		return true;
+	}
+	if (menu_id == IDM_TOGGLE_NOTIFY)
+	{
+		ToggleNotifyBlocks();
+		return true;
+	}
+	if (menu_id == IDM_TOGGLE_LOG)
+	{
+		ToggleLogBlocks();
+		return true;
+	}
+	if (menu_id == IDM_OPEN_LOG_FOLDER)
+	{
+		OpenLogFolder();
+		return true;
+	}
+	if (menu_id == IDM_EXPORT_SUPPORT)
+	{
+		// No dump: this path exists to be usable *before* anything goes wrong,
+		// and a minidump of a healthy process would only add noise.
+		ExportSupportBundle();
+		return true;
+	}
+	if (menu_id == IDM_OPEN_SETTINGS)
+	{
+		OpenCheckupWindow();
+		return true;
+	}
+	if (menu_id == IDM_RESET_STATS)
+	{
+		// The controller also resets the notification baseline through its sink
+		app_controller_reset_statistics(&app->controller);
+
+#ifndef NDEBUG
+		LOG_INFO(&app->logger, "Statistics reset");
+#endif
+		return true;
+	}
+	if (menu_id == IDM_PRESET_DEFAULT)
+	{
+		ApplyPreset(&CONFIG_PRESET_DEFAULT, true);
+		return true;
+	}
+	if (menu_id == IDM_PRESET_OFFICE)
+	{
+		ApplyPreset(&CONFIG_PRESET_OFFICE, true);
+		return true;
+	}
+	if (menu_id == IDM_PRESET_STRICT)
+	{
+		ApplyPreset(&CONFIG_PRESET_STRICT, true);
+		return true;
+	}
+	if (menu_id == IDM_RESTORE_DEFAULTS)
+	{
+		RestoreDefaults();
+		return true;
+	}
+	if (menu_id == IDM_LANG_EN)
+	{
+		SetLanguage(LANG_EN);
+		return true;
+	}
+	if (menu_id == IDM_LANG_ZH)
+	{
+		SetLanguage(LANG_ZH_CN);
+		return true;
+	}
+
+	return false;
+}
+
+static bool HandleThresholdCommand(AppState *app, UINT menu_id)
+{
+	// Smart Drag Protection tuning
+	//
+	// Through the controller, not the manager: it is the only writer of the
+	// configuration, and going around it skipped the range clamping and the
+	// dirty flag (the commit below would then persist nothing).
+	if (menu_id >= (UINT)IDM_RELEASE_DELAY_BASE &&
+		menu_id < (UINT)IDM_RELEASE_DELAY_BASE + RELEASE_DELAY_PRESET_COUNT)
+	{
+		int value = config_release_delay_presets()[menu_id - (UINT)IDM_RELEASE_DELAY_BASE];
+		app_controller_set_release_delay(&app->controller, (uint32_t)value);
+		SaveSettings();
+		return true;
+	}
+	if (menu_id >= (UINT)IDM_DRAG_DISTANCE_BASE &&
+		menu_id < (UINT)IDM_DRAG_DISTANCE_BASE + DRAG_DISTANCE_PRESET_COUNT)
+	{
+		int value = config_drag_distance_presets()[menu_id - (UINT)IDM_DRAG_DISTANCE_BASE];
+		app_controller_set_drag_distance(&app->controller, (uint32_t)value);
+		SaveSettings();
+		return true;
+	}
+
+	// Individual button toggles: IDM_TOGGLE_BASE + MouseButton
+	if (menu_id >= (UINT)IDM_TOGGLE_BASE &&
+		menu_id < (UINT)IDM_TOGGLE_BASE + (UINT)MOUSE_BUTTON_COUNT)
+	{
+		ToggleButton((MouseButton)(menu_id - (UINT)IDM_TOGGLE_BASE));
+		return true;
+	}
+
+	// Threshold presets and custom thresholds
+	{
+		int button = 0;
+		int index = 0;
+
+		if (menu_id_is_threshold_preset(menu_id, &button, &index))
+		{
+			if (button < MOUSE_BUTTON_COUNT && index < THRESHOLD_PRESET_COUNT)
+			{
+				const int *presets = config_threshold_presets((MouseButton)button);
+				SetButtonThreshold((MouseButton)button, presets[index]);
+			}
+			return true;
+		}
+
+		if (menu_id_is_threshold_custom(menu_id, &button, MOUSE_BUTTON_COUNT))
+		{
+			PromptCustomThreshold((MouseButton)button);
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool HandleListCommand(AppState *app, HWND hWnd, UINT menu_id)
+{
+	if (menu_id == IDM_PAUSE_CONTEXT)
+	{
+		uint64_t now = GetTickCount64();
+
+		// The same entry pauses and resumes. A temporary pause the user cannot
+		// lift from the place he started it is a trap, not a convenience.
+		if (context_filter_is_paused(&app->context_filter, now))
+			context_filter_set_pause(&app->context_filter, 0, 0);
+		else
+			context_filter_set_pause(&app->context_filter, now, CONTEXT_PAUSE_MS);
+
+		return true;
+	}
+
+	// Context mode: three mutually exclusive choices.
+	if (menu_id == IDM_CONTEXT_MODE_ALL_WHITE || menu_id == IDM_CONTEXT_MODE_ALL_BLACK)
+	{
+		app_controller_set_context_mode(&app->controller, CONTEXT_MODE_ALL);
+		SaveSettings();
+		return true;
+	}
+	if (menu_id == IDM_CONTEXT_MODE_WHITELIST)
+	{
+		// An empty whitelist in whitelist mode means "no program is filtered" -
+		// switching into it is a silent way to turn protection off for
+		// everything. The submenu says so in small print, but the switch itself
+		// has to ask, or the user clicks once and loses filtering everywhere.
+		static ContextPolicy policy_snapshot;
+		context_filter_copy_policy(&app->context_filter, &policy_snapshot);
+
+		if (policy_snapshot.whitelist.count == 0)
+		{
+			if (MessageBoxW(UiDialogOwner(), lang_str(STR_CONFIRM_EMPTY_WHITELIST),
+							lang_str(STR_APP_NAME),
+							MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
+				return true;
+		}
+
+		app_controller_set_context_mode(&app->controller, CONTEXT_MODE_WHITELIST);
+		SaveSettings();
+		return true;
+	}
+	if (menu_id == IDM_CONTEXT_MODE_BLACKLIST)
+	{
+		app_controller_set_context_mode(&app->controller, CONTEXT_MODE_BLACKLIST);
+		SaveSettings();
+		return true;
+	}
+
+	// Adding opens the file dialog, but only after the menu has closed.
+	if (menu_id == IDM_CONTEXT_ADD_WHITE || menu_id == IDM_CONTEXT_ADD_BLACK)
+	{
+		ContextMode list = (menu_id == IDM_CONTEXT_ADD_WHITE) ? CONTEXT_MODE_WHITELIST
+															  : CONTEXT_MODE_BLACKLIST;
+		PostMessageW(hWnd, WM_APP_ADD_EXE, (WPARAM)list, 0);
+		return true;
+	}
+
+	// One-click rule for the program that was in front. Adding it while "all
+	// programs" is in force would configure something that does nothing, so the
+	// mode follows the click: "don't filter this" is only meaningful when the
+	// blacklist is the list in force.
+	if (menu_id == IDM_EXCLUDE_CURRENT || menu_id == IDM_ONLY_CURRENT)
+	{
+		ContextMode list = (menu_id == IDM_ONLY_CURRENT) ? CONTEXT_MODE_WHITELIST
+														 : CONTEXT_MODE_BLACKLIST;
+
+		// Static: a policy copy is ~65 KB.
+		static ContextPolicy snapshot;
+		context_filter_copy_policy(&app->context_filter, &snapshot);
+
+		// Claimed even when there is nothing to add: falling through would send
+		// this id to DefWindowProc, which is not what "no foreground program"
+		// means.
+		if (!snapshot.recent_path[0])
+			return true;
+
+		ContextAddResult result = context_filter_add_path(&app->context_filter, list,
+														  snapshot.recent_path);
+
+		if (result == CONTEXT_ADD_OK)
+		{
+			if (snapshot.mode == CONTEXT_MODE_ALL)
+				app_controller_set_context_mode(&app->controller, list);
+
+			SaveSettings();
+		}
+
+		ShowContextAddResult(list, snapshot.recent_path, result);
+		return true;
+	}
+
+	if (menu_id >= (UINT)IDM_CONTEXT_LIST_WHITE &&
+		menu_id < (UINT)IDM_CONTEXT_LIST_WHITE + IDM_CONTEXT_LIST_MAX)
+	{
+		RemoveContextPath(CONTEXT_MODE_WHITELIST, menu_id - (UINT)IDM_CONTEXT_LIST_WHITE);
+		return true;
+	}
+	if (menu_id >= (UINT)IDM_CONTEXT_LIST_BLACK &&
+		menu_id < (UINT)IDM_CONTEXT_LIST_BLACK + IDM_CONTEXT_LIST_MAX)
+	{
+		RemoveContextPath(CONTEXT_MODE_BLACKLIST, menu_id - (UINT)IDM_CONTEXT_LIST_BLACK);
+		return true;
+	}
+
+	return false;
+}
+
+static bool HandleLearningCommand(AppState *app, UINT menu_id)
+{
+	if (menu_id == IDM_TOGGLE_LEARNING)
+	{
+		bool enable = !app->prefs.learning_enabled;
+		app_controller_set_learning(&app->controller, enable);
+
+		if (enable)
+		{
+			signal_ring_init(&app->signals);
+			if (!learning_service_start(&app->learning, &app->signals, LearningThresholdFor, app))
+			{
+				app_controller_set_learning(&app->controller, false);
+				ShowErrorMessageBox(lang_str(STR_SETTINGS_UNAVAILABLE));
+				return true;
+			}
+		}
+		else
+		{
+			learning_service_stop(&app->learning);
+			signal_ring_init(&app->signals);
+		}
+
+		SaveSettings();
+		return true;
+	}
+	if (menu_id == IDM_ADOPT_LEARNING)
+	{
+		LearningAdvice advice;
+		learning_service_snapshot(&app->learning, &advice);
+
+		wchar_t applied[160];
+		applied[0] = L'\0';
+		bool any = false;
+
+		// Only the buttons the menu actually shows. X1/X2 are sampled like any
+		// other button, so they can hold advice that is never rendered - adopting
+		// it would move a side button with no visible cause, and when only a side
+		// button has advice the entry looks greyed out while the data is there.
+		// Sharing this list with the menu keeps "visible" and "adoptable" the
+		// same set.
+		static const MouseButton shown[] = {MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT,
+											MOUSE_BUTTON_MIDDLE};
+
+		for (int k = 0; k < (int)ARRAYSIZE(shown); k++)
+		{
+			int i = (int)shown[k];
+
+			if (advice.suggested_ms[i] == 0)
+				continue;
+
+			// Re-apply the ±50% guard against the threshold in force NOW. The
+			// cached advice is not recomputed when the user edits a threshold by
+			// hand, so a stale "suggest 100" could otherwise be adopted on top of
+			// a threshold since lowered to 5 - the guard meant to prevent exactly
+			// that never ran.
+			uint32_t current = app->debounce.buttons[i].thresholdMs;
+			uint32_t value = advice.suggested_ms[i];
+			uint32_t low = current / 2u;
+			uint32_t high = current + current / 2u;
+
+			if (low < THRESHOLD_MIN_VALUE)
+				low = THRESHOLD_MIN_VALUE;
+			if (high > THRESHOLD_MAX_VALUE)
+				high = THRESHOLD_MAX_VALUE;
+
+			if (value < low)
+				value = low;
+			if (value > high)
+				value = high;
+
+			if (value == current)
+				continue;
+
+			app_controller_set_threshold(&app->controller, (MouseButton)i, value);
+
+			// Name the button: "applied: 40 ms" leaves the user guessing which
+			// switch just moved, and the menu shows three numbers at once.
+			wchar_t part[64];
+			if (SUCCEEDED(StringCchPrintfW(part, ARRAYSIZE(part), L"%s%s %u ms",
+										   any ? L", " : L"",
+										   lang_button_short_name((MouseButton)i),
+										   (unsigned)value)))
+			{
+				StringCchCatW(applied, ARRAYSIZE(applied), part);
+				any = true;
+			}
+		}
+
+		// The samples that produced these numbers are spent. Keeping them would
+		// make the same advice reappear on the next gesture, so the menu would
+		// look like the click did nothing.
+		//
+		// The ring goes first: the worker recomputes whenever the sample total
+		// changes, so clearing the cached advice first would let it republish the
+		// same advice from the still-full ring for one 100 ms tick - the "it came
+		// back right after I adopted it" the user would see.
+		signal_ring_init(&app->signals);
+		learning_service_reset(&app->learning);
+		SaveSettings();
+
+		if (any && app->tray_ready)
+		{
+			wchar_t text[256];
+			if (SUCCEEDED(StringCchPrintfW(text, ARRAYSIZE(text),
+										   lang_str(STR_LEARNING_APPLIED_FMT), applied)))
+				tray_icon_show_balloon(&app->tray_icon, lang_str(STR_APP_NAME), text,
+									   NIIF_INFO);
+		}
+
+		return true;
+	}
+
+	return false;
+}
+
 static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	switch (uMsg)
@@ -1438,11 +2113,7 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 		{
 			debounce_check_deferred_releases(&g_app.debounce);
 
-			// Replays run here and nowhere else: this is the one place on the
-			// input path that is guaranteed to be outside the hook callback.
-			debounce_service_replay(&g_app.debounce);
-
-			// Stop polling as soon as there is nothing left to release or replay
+			// Stop polling as soon as there is nothing left to release
 			if (!debounce_has_pending_work(&g_app.debounce))
 			{
 				KillTimer(hWnd, TIMER_DEFERRED_RELEASE);
@@ -1584,151 +2255,47 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 		break;
 	}
 
+	// Two hops on purpose: the menu command only asks for this, and the dialog
+	// opens after TrackPopupMenu has returned and its trailing WM_NULL has been
+	// dispatched. Opening it directly swallows the next tray click.
+	case WM_APP_ADD_EXE:
+		PostMessageW(hWnd, WM_APP_ADD_EXE_FILE, wParam, 0);
+		break;
+
+	case WM_APP_ADD_EXE_FILE:
+		PromptAddContextPath((ContextMode)wParam);
+		break;
+
 	case WM_COMMAND:
 	{
 		UINT menu_id = LOWORD(wParam);
+		bool handled = false;
 
-		if (menu_id == IDM_ABOUT)
+		switch (command_classify(menu_id))
 		{
-			about_window_show(hWnd, g_app.hInstance);
-			return 0;
-		}
-		if (menu_id == IDM_EXIT)
-		{
-			PostMessage(hWnd, WM_CLOSE, 0, 0);
-			return 0;
-		}
-		if (menu_id == IDM_TOGGLE_ENABLE)
-		{
-			ToggleEnableAll();
-			return 0;
-		}
-		if (menu_id == IDM_TOGGLE_HYBRID)
-		{
-			ToggleHybridHeuristic();
-			return 0;
-		}
-		if (menu_id == IDM_TOGGLE_AUTOSTART)
-		{
-			ToggleAutostart();
-			return 0;
-		}
-		if (menu_id == IDM_TOGGLE_NOTIFY)
-		{
-			ToggleNotifyBlocks();
-			return 0;
-		}
-		if (menu_id == IDM_TOGGLE_LOG)
-		{
-			ToggleLogBlocks();
-			return 0;
-		}
-		if (menu_id == IDM_OPEN_LOG_FOLDER)
-		{
-			OpenLogFolder();
-			return 0;
-		}
-		if (menu_id == IDM_EXPORT_SUPPORT)
-		{
-			// No dump: this path exists to be usable *before* anything goes wrong,
-			// and a minidump of a healthy process would only add noise.
-			ExportSupportBundle();
-			return 0;
-		}
-		if (menu_id == IDM_OPEN_SETTINGS)
-		{
-			OpenCheckupWindow();
-			return 0;
-		}
-		if (menu_id == IDM_RESET_STATS)
-		{
-			// The controller also resets the notification baseline through its sink
-			app_controller_reset_statistics(&g_app.controller);
-
-#ifndef NDEBUG
-			LOG_INFO(&g_app.logger, "Statistics reset");
-#endif
-			return 0;
-		}
-		if (menu_id == IDM_PRESET_DEFAULT)
-		{
-			ApplyPreset(&CONFIG_PRESET_DEFAULT, true);
-			return 0;
-		}
-		if (menu_id == IDM_PRESET_OFFICE)
-		{
-			ApplyPreset(&CONFIG_PRESET_OFFICE, true);
-			return 0;
-		}
-		if (menu_id == IDM_PRESET_STRICT)
-		{
-			ApplyPreset(&CONFIG_PRESET_STRICT, true);
-			return 0;
-		}
-		if (menu_id == IDM_RESTORE_DEFAULTS)
-		{
-			RestoreDefaults();
-			return 0;
-		}
-		if (menu_id == IDM_LANG_EN)
-		{
-			SetLanguage(LANG_EN);
-			return 0;
-		}
-		if (menu_id == IDM_LANG_ZH)
-		{
-			SetLanguage(LANG_ZH_CN);
-			return 0;
+		case COMMAND_GROUP_MENU:
+			handled = HandleMenuCommand(&g_app, hWnd, menu_id);
+			break;
+		case COMMAND_GROUP_THRESHOLD:
+			handled = HandleThresholdCommand(&g_app, menu_id);
+			break;
+		case COMMAND_GROUP_LIST:
+			handled = HandleListCommand(&g_app, hWnd, menu_id);
+			break;
+		case COMMAND_GROUP_LEARNING:
+			handled = HandleLearningCommand(&g_app, menu_id);
+			break;
+		default:
+			// Id 0 is the inert label row used throughout the menus; anything
+			// else is a gap worth counting rather than ignoring. Counted in
+			// release builds too: "this entry does nothing" is a user report,
+			// and a counter is the only thing that can confirm it happened.
+			if (menu_id != 0)
+				InterlockedIncrement(&g_app.unhandled_menu_ids);
+			break;
 		}
 
-		// Smart Drag Protection tuning
-		//
-		// Through the controller, not the manager: it is the only writer of the
-		// configuration, and going around it skipped the range clamping and the
-		// dirty flag (the commit below would then persist nothing).
-		if (menu_id >= (UINT)IDM_RELEASE_DELAY_BASE && menu_id < (UINT)IDM_RELEASE_DELAY_BASE + RELEASE_DELAY_PRESET_COUNT)
-		{
-			int value = config_release_delay_presets()[menu_id - (UINT)IDM_RELEASE_DELAY_BASE];
-			app_controller_set_release_delay(&g_app.controller, (uint32_t)value);
-			SaveSettings();
-			return 0;
-		}
-		if (menu_id >= (UINT)IDM_DRAG_DISTANCE_BASE && menu_id < (UINT)IDM_DRAG_DISTANCE_BASE + DRAG_DISTANCE_PRESET_COUNT)
-		{
-			int value = config_drag_distance_presets()[menu_id - (UINT)IDM_DRAG_DISTANCE_BASE];
-			app_controller_set_drag_distance(&g_app.controller, (uint32_t)value);
-			SaveSettings();
-			return 0;
-		}
-
-		// Individual button toggles: IDM_TOGGLE_BASE + MouseButton
-		if (menu_id >= (UINT)IDM_TOGGLE_BASE && menu_id < (UINT)IDM_TOGGLE_BASE + (UINT)MOUSE_BUTTON_COUNT)
-		{
-			ToggleButton((MouseButton)(menu_id - (UINT)IDM_TOGGLE_BASE));
-			return 0;
-		}
-
-		// Threshold presets and custom thresholds
-		{
-			int button = 0;
-			int index = 0;
-
-			if (menu_id_is_threshold_preset(menu_id, &button, &index))
-			{
-				if (button < MOUSE_BUTTON_COUNT && index < THRESHOLD_PRESET_COUNT)
-				{
-					const int *presets = config_threshold_presets((MouseButton)button);
-					SetButtonThreshold((MouseButton)button, presets[index]);
-				}
-				return 0;
-			}
-
-			if (menu_id_is_threshold_custom(menu_id, &button, MOUSE_BUTTON_COUNT))
-			{
-				PromptCustomThreshold((MouseButton)button);
-				return 0;
-			}
-		}
+		(void)handled;
 		break;
 	}
 
@@ -1768,16 +2335,29 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 	return DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
 
-// Check whether the protection can actually act on mouse input
+// Check whether the protection can actually act on mouse input.
+// The installed flag alone is a lie: Windows silently removes a low-level hook
+// whose callback overran its time budget. The watchdog notices that from real
+// mouse input, so trust it before telling the user the protection is working.
 static bool IsHookActive(void)
 {
-	return g_app.hook_ready && g_app.mouse_hook.installed;
+	return g_app.hook_ready && g_app.mouse_hook.installed &&
+		   hook_watchdog_is_healthy(&g_app.watchdog);
 }
 
 // Show context menu
 static void ShowContextMenu(const HWND hWnd, const int x, const int y)
 {
-	context_menu_show(&g_app.context_menu, hWnd, x, y, &g_app.debounce, &g_app.prefs, IsHookActive());
+	// Static: the policy snapshot is ~65 KB.
+	static ContextPolicy policy;
+	context_filter_copy_policy(&g_app.context_filter, &policy);
+
+	LearningAdvice advice;
+	learning_service_snapshot(&g_app.learning, &advice);
+
+	context_menu_show(&g_app.context_menu, hWnd, x, y, &g_app.debounce, &g_app.prefs,
+					  IsHookActive(), &advice, &policy,
+					  context_filter_is_paused(&g_app.context_filter, GetTickCount64()));
 
 	// The blocked counter may have been reset from the menu; refresh the hover
 	// text while we are already on the UI thread.
@@ -1808,7 +2388,9 @@ static void CDECL ShowErrorMessageBox(LPCWSTR message, ...)
 	StringCchVPrintfW(buffer, ARRAYSIZE(buffer), message, args);
 	va_end(args);
 
-	MessageBoxW(NULL, buffer, lang_str(STR_APP_NAME), MB_OK | MB_ICONERROR);
+	// NULL only while starting up, before the tray window exists; the helper
+	// degrades to NULL on its own in that case.
+	MessageBoxW(UiDialogOwner(), buffer, lang_str(STR_APP_NAME), MB_OK | MB_ICONERROR);
 }
 
 // Check whether a whitespace separated command line switch is present.

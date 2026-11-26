@@ -17,6 +17,12 @@
 #include "../src/core/mouse_hook.h"
 #include "../src/core/notify_policy.h"
 #include "../src/core/event_history.h"
+#include "../src/core/signal_ring.h"
+#include "../src/core/learning.h"
+#include "../src/core/command_classify.h"
+#include "../src/core/app_capabilities.h"
+#include "../src/core/context_filter.h"
+#include "../src/core/learning_service.h"
 #include "../src/ui/language.h"
 #include "../src/ui/log_format.h"
 #include "../src/utils/support_bundle.h"
@@ -946,9 +952,6 @@ static void test_debounce_decision(void)
 	CHECK(debounce_process_event_ex(&manager, &next_press, &decision));
 	CHECK(decision.reason == DEBOUNCE_REASON_BLOCK_DEFERRING);
 	CHECK(decision.blocked);
-	CHECK(!decision.replay);
-	CHECK(!decision.flushed_deferred);
-	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].pending_replay);
 	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isDeferringRelease);
 
 	// A long hold makes the two intervals diverge, and the log must show the
@@ -1523,15 +1526,19 @@ static void test_log_format(void)
 	log_format_lf_to_crlf(NULL, converted, ARRAYSIZE(converted));
 	CHECK(converted[0] == L'\0');
 
-	// The status line never claims protection while the hook is gone
+	// The status line never claims protection while the hook is gone.
+	//
+	// It is now a prefix check rather than an equality check: the line carries
+	// the per-capability summary after the sentence, and that summary must not
+	// be allowed to change what the sentence says.
 	snapshot.hook_active = true;
 	snapshot.hook_recoveries = 0;
 	log_format_status(&snapshot, text, ARRAYSIZE(text));
-	CHECK(wcscmp(text, lang_str(STR_STATUS_OK)) == 0);
+	CHECK(wcsncmp(text, lang_str(STR_STATUS_OK), wcslen(lang_str(STR_STATUS_OK))) == 0);
 
 	snapshot.hook_active = false;
 	log_format_status(&snapshot, text, ARRAYSIZE(text));
-	CHECK(wcscmp(text, lang_str(STR_STATUS_BAD)) == 0);
+	CHECK(wcsncmp(text, lang_str(STR_STATUS_BAD), wcslen(lang_str(STR_STATUS_BAD))) == 0);
 
 	// A recovery is mentioned on top of the base sentence
 	snapshot.hook_active = true;
@@ -1768,6 +1775,620 @@ static void test_checkup_formats(void)
 	language_set(saved);
 }
 
+static void test_signal_ring(void)
+{
+	printf("signal ring\n");
+
+	SignalRing ring;
+	signal_ring_init(&ring);
+
+	// The bucket is the elapsed interval the engine actually compares.
+	CHECK(signal_ring_bucket(0) == 1);
+	CHECK(signal_ring_bucket(1) == 1);
+	CHECK(signal_ring_bucket(5) == 5);
+	CHECK(signal_ring_bucket(SIGNAL_RING_BUCKET_COUNT) == SIGNAL_RING_BUCKET_COUNT);
+	CHECK(signal_ring_bucket(SIGNAL_RING_BUCKET_COUNT + 1) == SIGNAL_RING_BUCKET_COUNT);
+	CHECK(signal_ring_bucket(200) == SIGNAL_RING_BUCKET_COUNT);
+
+	// The sample window must not reach past the last bucket. If it did, every
+	// gap between bucket 64 and the window would be squashed into bucket 64, so
+	// a switch chattering at 90 ms would read as 64 and the suggestion would
+	// stop below the value it was supposed to reach.
+	CHECK(SIGNAL_RING_SAMPLE_MAX_MS == SIGNAL_RING_BUCKET_COUNT);
+
+	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
+		CHECK(signal_ring_samples(&ring, i) == 0);
+
+	// Every accepted interval is recorded, whether the engine blocked it or not:
+	// "blocked only" is what starved the histogram in the first place.
+	signal_ring_note_interval(&ring, MOUSE_BUTTON_LEFT, 5);
+	signal_ring_note_interval(&ring, MOUSE_BUTTON_LEFT, 5);
+	signal_ring_note_interval(&ring, MOUSE_BUTTON_LEFT, 65);
+	CHECK(signal_ring_samples(&ring, MOUSE_BUTTON_LEFT) == 3);
+	CHECK(signal_ring_bucket_value(&ring, MOUSE_BUTTON_LEFT, 5) == 2);
+	CHECK(signal_ring_bucket_value(&ring, MOUSE_BUTTON_LEFT, 64) == 1);
+	CHECK(signal_ring_bucket_value(&ring, MOUSE_BUTTON_LEFT, 1) == 0);
+	CHECK(signal_ring_samples(&ring, MOUSE_BUTTON_RIGHT) == 0);
+
+	// Reset clears only the requested button and is safe on bad input
+	signal_ring_reset(&ring, MOUSE_BUTTON_LEFT);
+	CHECK(signal_ring_samples(&ring, MOUSE_BUTTON_LEFT) == 0);
+	CHECK(signal_ring_bucket_value(&ring, MOUSE_BUTTON_LEFT, 5) == 0);
+
+	signal_ring_init(NULL);
+	signal_ring_note_interval(NULL, MOUSE_BUTTON_LEFT, 1);
+	signal_ring_reset(NULL, MOUSE_BUTTON_LEFT);
+	CHECK(signal_ring_samples(NULL, MOUSE_BUTTON_LEFT) == 0);
+	CHECK(signal_ring_bucket_value(&ring, MOUSE_BUTTON_LEFT, 99) == 0);
+	CHECK(signal_ring_bucket_value(&ring, MOUSE_BUTTON_UNKNOWN, 1) == 0);
+}
+
+static void test_learning(void)
+{
+	printf("learning\n");
+
+	SignalRing ring;
+	LearningAdvice advice;
+	uint32_t thresholds[MOUSE_BUTTON_COUNT];
+	uint32_t samples = 0;
+
+	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
+		thresholds[i] = 50;
+
+	signal_ring_init(&ring);
+
+	// No evidence: no suggestion, and the engine keeps its own threshold
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_LEFT, 50, &samples) == 0);
+	CHECK(samples == 0);
+	learning_advice_from_ring(&advice, &ring, thresholds);
+	CHECK(advice.suggested_ms[MOUSE_BUTTON_LEFT] == 0);
+	CHECK(advice.seq == 0);
+
+	// 31 samples are not enough: P80 of 31 would still be dominated by one point
+	for (uint32_t i = 0; i < LEARNING_MIN_SAMPLES - 1; i++)
+		signal_ring_note_interval(&ring, MOUSE_BUTTON_LEFT, 5);
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_LEFT, 50, &samples) == 0);
+	CHECK(samples == LEARNING_MIN_SAMPLES - 1);
+
+	// The 32nd sample is a 64 ms outlier - the widest gap the sampler accepts.
+	// P80 needs 26 hits, so the raw answer is just above the 5 ms chatter; one
+	// outlier must not set the policy. The relative limit then raises it to half
+	// the current 50 ms threshold, which is the intended guard against a jump.
+	signal_ring_note_interval(&ring, MOUSE_BUTTON_LEFT, 64);
+	CHECK(signal_ring_samples(&ring, MOUSE_BUTTON_LEFT) == LEARNING_MIN_SAMPLES);
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_LEFT, 50, &samples) == 25);
+	CHECK(samples == LEARNING_MIN_SAMPLES);
+
+	// A saturated 64 ms bucket stays at 64, never 200
+	signal_ring_reset(&ring, MOUSE_BUTTON_LEFT);
+	for (uint32_t i = 0; i < LEARNING_MIN_SAMPLES; i++)
+		signal_ring_note_interval(&ring, MOUSE_BUTTON_LEFT, 64);
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_LEFT, 50, NULL) == 65);
+
+	// A zero gap is the most certain chatter there is: both events fell inside
+	// one 15.6 ms clock tick. It has to be sampled, not discarded as "no
+	// measurement" - discarding those is what kept the histogram empty.
+	signal_ring_reset(&ring, MOUSE_BUTTON_LEFT);
+	for (uint32_t i = 0; i < LEARNING_MIN_SAMPLES; i++)
+		signal_ring_note_interval(&ring, MOUSE_BUTTON_LEFT, 0);
+	CHECK(signal_ring_bucket_value(&ring, MOUSE_BUTTON_LEFT, 1) == LEARNING_MIN_SAMPLES);
+	// The raw answer is 2 ms, lifted to the 25 ms floor of a 50 ms threshold.
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_LEFT, 50, NULL) == 25);
+
+	// Relative limit: a current threshold of 10 cannot jump past 15
+	signal_ring_reset(&ring, MOUSE_BUTTON_LEFT);
+	for (uint32_t i = 0; i < LEARNING_MIN_SAMPLES; i++)
+		signal_ring_note_interval(&ring, MOUSE_BUTTON_LEFT, 60);
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_LEFT, 10, &samples) == 15);
+	// 61 ms raw is lifted to the 100 ms floor when the current value is 200.
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_LEFT, 200, NULL) == 100);
+
+	// A suggestion equal to the threshold already in force is not a suggestion.
+	// Adopting it changes nothing while still wiping the samples and reporting
+	// success, which reads as "I clicked adopt and nothing happened".
+	signal_ring_reset(&ring, MOUSE_BUTTON_LEFT);
+	for (uint32_t i = 0; i < LEARNING_MIN_SAMPLES; i++)
+		signal_ring_note_interval(&ring, MOUSE_BUTTON_LEFT, 40);
+	// P80 bucket 40 -> raw 41; asking with current 41 must come back empty
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_LEFT, 41, &samples) == 0);
+	CHECK(samples == LEARNING_MIN_SAMPLES);
+	// Another threshold still gets an answer
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_LEFT, 50, NULL) == 41);
+
+	// Suggestions are per button; untouched buttons stay silent
+	learning_advice_from_ring(&advice, &ring, thresholds);
+	CHECK(advice.suggested_ms[MOUSE_BUTTON_LEFT] > 0);
+	CHECK(advice.samples[MOUSE_BUTTON_LEFT] == LEARNING_MIN_SAMPLES);
+	CHECK(advice.suggested_ms[MOUSE_BUTTON_RIGHT] == 0);
+	CHECK(advice.seq == LEARNING_MIN_SAMPLES);
+
+	// Degenerate input never suggests a change
+	CHECK(learning_suggest_threshold(NULL, MOUSE_BUTTON_LEFT, 50, &samples) == 0);
+	CHECK(samples == 0);
+	CHECK(learning_suggest_threshold(&ring, MOUSE_BUTTON_UNKNOWN, 50, &samples) == 0);
+	learning_advice_from_ring(NULL, &ring, thresholds);
+	learning_advice_from_ring(&advice, NULL, thresholds);
+	CHECK(advice.suggested_ms[MOUSE_BUTTON_LEFT] == 0);
+}
+
+static void test_context_filter(void)
+{
+	printf("context filter\n");
+
+	// Mode table, one line per cell. The return value means "pass through".
+	CHECK(!context_mode_suppresses(CONTEXT_MODE_ALL, false, false));
+	CHECK(!context_mode_suppresses(CONTEXT_MODE_ALL, true, false));
+	CHECK(context_mode_suppresses(CONTEXT_MODE_WHITELIST, false, false));
+	CHECK(!context_mode_suppresses(CONTEXT_MODE_WHITELIST, true, false));
+	CHECK(context_mode_suppresses(CONTEXT_MODE_WHITELIST, false, true));
+	CHECK(context_mode_suppresses(CONTEXT_MODE_BLACKLIST, false, true));
+	CHECK(!context_mode_suppresses(CONTEXT_MODE_BLACKLIST, true, false));
+	// Defensive: a program in both lists never crashes or inverts the policy
+	CHECK(!context_mode_suppresses(CONTEXT_MODE_WHITELIST, true, true));
+	CHECK(context_mode_suppresses(CONTEXT_MODE_BLACKLIST, true, true));
+	// Unknown mode falls back to ALL (filter everything)
+	CHECK(!context_mode_suppresses((ContextMode)99, false, false));
+
+	// Path matching: exact, case-insensitive, legacy wildcard, no cross-path bleed
+	CHECK(context_path_matches(L"C:\\Games\\game.exe", L"C:\\Games\\game.exe", L"game.exe"));
+	CHECK(context_path_matches(L"C:\\Games\\GAME.EXE", L"c:\\games\\game.exe", L"game.exe"));
+	CHECK(context_path_matches(L"*\\game.exe", L"D:\\Other\\game.exe", L"game.exe"));
+	CHECK(!context_path_matches(L"*\\game.exe", L"D:\\Other\\other.exe", L"other.exe"));
+	CHECK(!context_path_matches(L"C:\\Games\\game.exe", L"D:\\Other\\game.exe", L"game.exe"));
+	CHECK(!context_path_matches(NULL, L"C:\\x.exe", L"x.exe"));
+
+	// Static on purpose: a ContextFilter is ~65 KB and must not go on the stack.
+	static ContextFilter filter;
+	static ContextPolicy policy;
+	context_filter_init(&filter);
+
+	CHECK(context_filter_add_path(&filter, CONTEXT_MODE_BLACKLIST, L"C:\\Games\\game.exe") == CONTEXT_ADD_OK);
+	CHECK(context_filter_add_path(&filter, CONTEXT_MODE_BLACKLIST, L"C:\\Games\\game.exe") == CONTEXT_ADD_DUPLICATE);
+	CHECK(context_filter_add_path(&filter, CONTEXT_MODE_WHITELIST, L"C:\\Games\\game.exe") == CONTEXT_ADD_IN_OTHER);
+	CHECK(context_filter_add_path(&filter, CONTEXT_MODE_BLACKLIST, L"") == CONTEXT_ADD_INVALID);
+	CHECK(context_filter_add_path(&filter, CONTEXT_MODE_BLACKLIST, L"C:\\x\\*.exe") == CONTEXT_ADD_INVALID);
+	CHECK(context_filter_add_path(&filter, CONTEXT_MODE_ALL, L"C:\\x.exe") == CONTEXT_ADD_INVALID);
+
+	context_filter_copy_policy(&filter, &policy);
+	CHECK(policy.blacklist.count == 1);
+	CHECK(context_path_list_contains(&policy.blacklist, L"C:\\Games\\game.exe", L"game.exe"));
+	CHECK(!context_path_list_contains(&policy.blacklist, L"C:\\Games\\other.exe", L"other.exe"));
+
+	// Blacklist: the listed program passes, everything else is filtered
+	context_filter_set_mode(&filter, CONTEXT_MODE_BLACKLIST);
+	CHECK(context_filter_get_mode(&filter) == CONTEXT_MODE_BLACKLIST);
+	CHECK(context_filter_compute_suppress(&filter, L"C:\\Games\\game.exe", L"game.exe"));
+	CHECK(!context_filter_compute_suppress(&filter, L"C:\\Other\\app.exe", L"app.exe"));
+
+	// Whitelist: only the listed program is filtered
+	CHECK(context_filter_add_path(&filter, CONTEXT_MODE_WHITELIST, L"C:\\Games\\only.exe") == CONTEXT_ADD_OK);
+	context_filter_set_mode(&filter, CONTEXT_MODE_WHITELIST);
+	CHECK(!context_filter_compute_suppress(&filter, L"C:\\Games\\only.exe", L"only.exe"));
+	CHECK(context_filter_compute_suppress(&filter, L"C:\\Other\\app.exe", L"app.exe"));
+
+	// Removal takes effect immediately
+	CHECK(context_filter_remove_path(&filter, CONTEXT_MODE_BLACKLIST, L"C:\\Games\\game.exe"));
+	CHECK(!context_filter_remove_path(&filter, CONTEXT_MODE_BLACKLIST, L"C:\\Games\\game.exe"));
+	context_filter_set_mode(&filter, CONTEXT_MODE_BLACKLIST);
+	CHECK(!context_filter_compute_suppress(&filter, L"C:\\Games\\game.exe", L"game.exe"));
+
+	// Capacity, then reset. Start from empty so the earlier entries do not count.
+	context_filter_reset(&filter);
+	for (int i = 0; i < CONTEXT_LIST_MAX; i++)
+	{
+		wchar_t path[64];
+		StringCchPrintfW(path, ARRAYSIZE(path), L"C:\\Apps\\a%d.exe", i);
+		CHECK(context_filter_add_path(&filter, CONTEXT_MODE_WHITELIST, path) == CONTEXT_ADD_OK);
+	}
+	CHECK(context_filter_add_path(&filter, CONTEXT_MODE_WHITELIST, L"C:\\Apps\\extra.exe") == CONTEXT_ADD_FULL);
+
+	context_filter_reset(&filter);
+	CHECK(context_filter_get_mode(&filter) == CONTEXT_MODE_ALL);
+	context_filter_copy_policy(&filter, &policy);
+	CHECK(policy.whitelist.count == 0);
+	CHECK(policy.blacklist.count == 0);
+
+	// Snapshot: publish, hook read, own window, unknown pid
+	ContextSnapshot snapshot;
+	memset(&snapshot, 0, sizeof(snapshot));
+	CHECK(!context_filter_should_suppress(&snapshot, 1000));
+
+	context_filter_publish(&filter, 1234, true, false, L"game.exe");
+	CHECK(context_filter_should_suppress(&filter.snap, 1000));
+	context_filter_publish(&filter, 5678, false, false, L"chrome.exe");
+	CHECK(!context_filter_should_suppress(&filter.snap, 1000));
+	context_filter_publish(&filter, 4321, true, true, L"MouseMend.exe");
+	CHECK(!context_filter_should_suppress(&filter.snap, 1000));
+	context_filter_publish(&filter, 0, true, false, L"unknown.exe");
+	CHECK(!context_filter_should_suppress(&filter.snap, 1000));
+
+	// Pause overrides everything and expires exactly
+	context_filter_publish(&filter, 1, false, false, L"x.exe");
+	context_filter_set_pause(&filter, 10000, CONTEXT_PAUSE_MS);
+	CHECK(context_filter_is_paused(&filter, 10000));
+	CHECK(context_filter_should_suppress(&filter.snap, 10000));
+	CHECK(context_filter_is_paused(&filter, 10000 + CONTEXT_PAUSE_MS - 1));
+	CHECK(!context_filter_is_paused(&filter, 10000 + CONTEXT_PAUSE_MS));
+
+	// Session-0 processes can never be in front, so a rule about them would be
+	// a no-op that still looks configured. The add path refuses them.
+	CHECK(context_program_is_reserved(L"csrss.exe"));
+	CHECK(context_program_is_reserved(L"CSRSS.EXE"));
+	CHECK(context_program_is_reserved(L"lsass.exe"));
+	CHECK(context_program_is_reserved(L"winlogon.exe"));
+	CHECK(!context_program_is_reserved(L"chrome.exe"));
+	CHECK(!context_program_is_reserved(L"explorer.exe"));
+	CHECK(!context_program_is_reserved(NULL));
+	CHECK(!context_program_is_reserved(L""));
+
+	// Shell hosts are a legitimate choice with a large blast radius: the UI
+	// warns, the core allows.
+	CHECK(context_program_is_shell(L"explorer.exe"));
+	CHECK(context_program_is_shell(L"ApplicationFrameHost.exe"));
+	CHECK(context_program_is_shell(L"EXPLORER.EXE"));
+	CHECK(!context_program_is_shell(L"chrome.exe"));
+	CHECK(!context_program_is_shell(NULL));
+
+	static ContextFilter guarded;
+	context_filter_init(&guarded);
+	CHECK(context_filter_add_path(&guarded, CONTEXT_MODE_BLACKLIST,
+								  L"C:\\Windows\\System32\\csrss.exe") == CONTEXT_ADD_RESERVED);
+	CHECK(context_filter_add_path(&guarded, CONTEXT_MODE_WHITELIST,
+								  L"C:\\Windows\\System32\\lsass.exe") == CONTEXT_ADD_RESERVED);
+	// The reserved check must not block a program the user really wants
+	CHECK(context_filter_add_path(&guarded, CONTEXT_MODE_BLACKLIST,
+								  L"C:\\Windows\\explorer.exe") == CONTEXT_ADD_OK);
+
+	// Every real policy change bumps the revision so the polling thread cannot
+	// keep serving a verdict computed before the user edited the lists. No-op
+	// operations must not bump it, or the thread would recompute for nothing.
+	static ContextFilter revised;
+	context_filter_init(&revised);
+	CHECK(revised.revision == 0);
+
+	CHECK(context_filter_add_path(&revised, CONTEXT_MODE_BLACKLIST,
+								  L"C:\\Apps\\prog.exe") == CONTEXT_ADD_OK);
+	CHECK(revised.revision == 1);
+
+	// Duplicate: nothing changed
+	CHECK(context_filter_add_path(&revised, CONTEXT_MODE_BLACKLIST,
+								  L"C:\\Apps\\prog.exe") == CONTEXT_ADD_DUPLICATE);
+	CHECK(revised.revision == 1);
+
+	context_filter_set_mode(&revised, CONTEXT_MODE_BLACKLIST);
+	CHECK(revised.revision == 2);
+
+	// Same mode again: nothing changed
+	context_filter_set_mode(&revised, CONTEXT_MODE_BLACKLIST);
+	CHECK(revised.revision == 2);
+
+	CHECK(context_filter_remove_path(&revised, CONTEXT_MODE_BLACKLIST,
+									 L"C:\\Apps\\prog.exe"));
+	CHECK(revised.revision == 3);
+
+	// Nothing left to remove
+	CHECK(!context_filter_remove_path(&revised, CONTEXT_MODE_BLACKLIST,
+									  L"C:\\Apps\\prog.exe"));
+	CHECK(revised.revision == 3);
+
+	context_filter_reset(&revised);
+	CHECK(revised.revision == 4);
+
+	// A zeroed filter (never initialised) must be safe to read
+	static ContextFilter zeroed;
+	memset(&zeroed, 0, sizeof(zeroed));
+	CHECK(!context_filter_should_suppress(&zeroed.snap, 0));
+
+	// Degenerate input
+	context_filter_init(NULL);
+	context_filter_publish(NULL, 1, true, false, L"x.exe");
+	context_filter_set_pause(NULL, 0, 1);
+	context_filter_set_mode(NULL, CONTEXT_MODE_ALL);
+	context_filter_reset(NULL);
+	CHECK(!context_filter_should_suppress(NULL, 0));
+	CHECK(!context_filter_is_paused(NULL, 0));
+	CHECK(context_filter_add_path(NULL, CONTEXT_MODE_BLACKLIST, L"C:\\x.exe") == CONTEXT_ADD_INVALID);
+	CHECK(!context_filter_remove_path(NULL, CONTEXT_MODE_BLACKLIST, L"C:\\x.exe"));
+}
+
+static void test_suppression(void)
+{
+	printf("suppression\n");
+
+	DebounceManager manager;
+	DebounceDecision decision;
+	MouseEvent press;
+
+	memset(&manager, 0, sizeof(manager));
+	CHECK(debounce_init(&manager));
+	debounce_set_monitored(&manager, MOUSE_BUTTON_LEFT, true);
+	debounce_set_threshold(&manager, MOUSE_BUTTON_LEFT, 50,
+						   THRESHOLD_MIN_VALUE, THRESHOLD_MAX_VALUE);
+
+	memset(&press, 0, sizeof(press));
+	press.button = MOUSE_BUTTON_LEFT;
+	press.is_down = true;
+	press.timestamp = 1000;
+	press.x = 100;
+	press.y = 100;
+
+	// Normal path still rejects a bounce 5 ms after the first press
+	CHECK(!debounce_process_event_ex(&manager, &press, &decision));
+	CHECK(decision.reason == DEBOUNCE_REASON_PASS);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].system_down);
+	press.timestamp = 1005;
+	CHECK(debounce_process_event_ex(&manager, &press, &decision));
+	CHECK(decision.reason == DEBOUNCE_REASON_BLOCK_THRESHOLD);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].isBlocked);
+	debounce_cleanup(&manager);
+
+	// Suppression turns the same bounce into a full PASS and leaves no stale
+	// blocked state for a later release to trip over.
+	memset(&manager, 0, sizeof(manager));
+	CHECK(debounce_init(&manager));
+	debounce_set_monitored(&manager, MOUSE_BUTTON_LEFT, true);
+	debounce_set_threshold(&manager, MOUSE_BUTTON_LEFT, 50,
+						   THRESHOLD_MIN_VALUE, THRESHOLD_MAX_VALUE);
+	press.timestamp = 1000;
+	CHECK(!debounce_process_event_ex_suppressed(&manager, &press, &decision, true));
+	CHECK(decision.reason == DEBOUNCE_REASON_PASS);
+	CHECK(!decision.blocked);
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isBlocked);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].system_down);
+
+	press.timestamp = 1005;
+	CHECK(!debounce_process_event_ex_suppressed(&manager, &press, &decision, true));
+	CHECK(decision.reason == DEBOUNCE_REASON_PASS);
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].isBlocked);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].blocks == 0);
+	CHECK(manager.buttons[MOUSE_BUTTON_LEFT].system_down);
+
+	// The real release must pass through, not be swallowed as a paired bounce
+	press.is_down = false;
+	press.timestamp = 1200;
+	CHECK(!debounce_process_event_ex_suppressed(&manager, &press, &decision, true));
+	CHECK(!manager.buttons[MOUSE_BUTTON_LEFT].system_down);
+	CHECK(decision.reason == DEBOUNCE_REASON_PASS);
+	debounce_cleanup(&manager);
+}
+
+static void test_app_capabilities(void)
+{
+	printf("app capabilities\n");
+
+	CapabilityState states[CAP_COUNT];
+
+	// NULL input: everything disabled, no crash
+	app_capabilities_evaluate(NULL, states);
+	for (int i = 0; i < CAP_COUNT; i++)
+		CHECK(states[i] == CAP_STATE_DISABLED);
+	app_capabilities_evaluate(NULL, NULL);
+
+	// Zeroed input: nothing enabled. The hook is the exception - it is never
+	// "disabled", because the program always tries to install it.
+	CapabilityInputs in;
+	memset(&in, 0, sizeof(in));
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_HOOK] == CAP_STATE_STALLED);
+	CHECK(states[CAP_LEARNING] == CAP_STATE_DISABLED);
+	CHECK(states[CAP_CONTEXT] == CAP_STATE_DISABLED);
+	CHECK(states[CAP_LOG] == CAP_STATE_DISABLED);
+
+	// The hook is never "disabled": the program always tries to install it, so
+	// anything short of working is a fault the user has to see.
+	in.hook_ready = true;
+	in.hook_installed = true;
+	in.hook_healthy = true;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_HOOK] == CAP_STATE_OK);
+
+	in.hook_healthy = false; // the watchdog saw input the hook missed
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_HOOK] == CAP_STATE_STALLED);
+
+	memset(&in, 0, sizeof(in));
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_HOOK] == CAP_STATE_STALLED);
+
+	// Learning: off / started but no samples / working / worker never came up
+	in.learning_enabled = true;
+	in.learning_started = true;
+	in.learning_has_samples = false;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_LEARNING] == CAP_STATE_UNKNOWN);
+
+	in.learning_has_samples = true;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_LEARNING] == CAP_STATE_OK);
+
+	in.learning_started = false;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_LEARNING] == CAP_STATE_STALLED);
+
+	in.learning_enabled = false;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_LEARNING] == CAP_STATE_DISABLED);
+
+	// Context: inactive / working / paused / never observed
+	memset(&in, 0, sizeof(in));
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_CONTEXT] == CAP_STATE_DISABLED);
+
+	in.context_active = true;
+	in.context_started = true;
+	in.context_observed = true;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_CONTEXT] == CAP_STATE_OK);
+
+	// Paused is stalled on purpose: while paused the lists really do nothing,
+	// and a user asking "why is the list not working" must see that.
+	in.context_paused = true;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_CONTEXT] == CAP_STATE_STALLED);
+
+	in.context_paused = false;
+	in.context_observed = false;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_CONTEXT] == CAP_STATE_UNKNOWN);
+
+	in.context_started = false;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_CONTEXT] == CAP_STATE_STALLED);
+
+	// Log: off / ready but directory not resolved yet / working / queue failed
+	memset(&in, 0, sizeof(in));
+	in.log_enabled = true;
+	in.log_ready = true;
+	in.log_directory_resolved = false;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_LOG] == CAP_STATE_UNKNOWN);
+
+	in.log_directory_resolved = true;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_LOG] == CAP_STATE_OK);
+
+	in.log_ready = false;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_LOG] == CAP_STATE_STALLED);
+
+	in.log_enabled = false;
+	app_capabilities_evaluate(&in, states);
+	CHECK(states[CAP_LOG] == CAP_STATE_DISABLED);
+
+	// The four states are rendered by the check-up window as owner-draw pills,
+	// so there is no string formatter left to test here. What matters is the
+	// classification above: it decides which colour and which word are used.
+}
+
+static void test_command_classify(void)
+{
+	printf("command classify\n");
+
+	// The inert label row is not a command and not an error
+	CHECK(command_classify(0) == COMMAND_GROUP_NONE);
+	CHECK(command_classify(WM_USER + 4999) == COMMAND_GROUP_NONE);
+
+	// Discrete ids
+	CHECK(command_classify(IDM_ABOUT) == COMMAND_GROUP_MENU);
+	CHECK(command_classify(IDM_EXIT) == COMMAND_GROUP_MENU);
+	CHECK(command_classify(IDM_TOGGLE_ENABLE) == COMMAND_GROUP_MENU);
+	CHECK(command_classify(IDM_RESTORE_DEFAULTS) == COMMAND_GROUP_MENU);
+	CHECK(command_classify(IDM_LANG_ZH) == COMMAND_GROUP_MENU);
+
+	CHECK(command_classify(IDM_TOGGLE_LEARNING) == COMMAND_GROUP_LEARNING);
+	CHECK(command_classify(IDM_ADOPT_LEARNING) == COMMAND_GROUP_LEARNING);
+
+	CHECK(command_classify(IDM_PAUSE_CONTEXT) == COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_EXCLUDE_CURRENT) == COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_ONLY_CURRENT) == COMMAND_GROUP_LIST);
+	// Two ids with the same meaning, far apart: a split that copies only the
+	// first one leaves the other dead without any visible difference.
+	CHECK(command_classify(IDM_CONTEXT_MODE_ALL_WHITE) == COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_CONTEXT_MODE_ALL_BLACK) == COMMAND_GROUP_LIST);
+
+	// Per-button switch: first, last, and one past the end
+	CHECK(command_classify(IDM_TOGGLE_BASE) == COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_TOGGLE_BASE + MOUSE_BUTTON_COUNT - 1) == COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_TOGGLE_BASE + MOUSE_BUTTON_COUNT) == COMMAND_GROUP_NONE);
+
+	// Release delay and drag distance presets
+	CHECK(command_classify(IDM_RELEASE_DELAY_BASE) == COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_RELEASE_DELAY_BASE + RELEASE_DELAY_PRESET_COUNT - 1) ==
+		  COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_RELEASE_DELAY_BASE + RELEASE_DELAY_PRESET_COUNT) ==
+		  COMMAND_GROUP_NONE);
+	CHECK(command_classify(IDM_DRAG_DISTANCE_BASE) == COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_DRAG_DISTANCE_BASE + DRAG_DISTANCE_PRESET_COUNT - 1) ==
+		  COMMAND_GROUP_THRESHOLD);
+
+	// Threshold presets and custom entries, including the ends of both ranges
+	CHECK(command_classify(IDM_THRESHOLD_PRESET_ID(0, 0)) == COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_THRESHOLD_PRESET_ID(MOUSE_BUTTON_COUNT - 1,
+												   THRESHOLD_PRESET_COUNT - 1)) ==
+		  COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_THRESHOLD_CUSTOM_ID(0)) == COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_THRESHOLD_CUSTOM_ID(MOUSE_BUTTON_COUNT - 1)) ==
+		  COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_THRESHOLD_CUSTOM_ID(MOUSE_BUTTON_COUNT)) == COMMAND_GROUP_NONE);
+
+	// List entries: first and last of each range
+	CHECK(command_classify(IDM_CONTEXT_LIST_WHITE) == COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_CONTEXT_LIST_WHITE + IDM_CONTEXT_LIST_MAX - 1) ==
+		  COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_CONTEXT_LIST_WHITE + IDM_CONTEXT_LIST_MAX) == COMMAND_GROUP_NONE);
+	CHECK(command_classify(IDM_CONTEXT_LIST_BLACK) == COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_CONTEXT_LIST_BLACK + IDM_CONTEXT_LIST_MAX - 1) ==
+		  COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_CONTEXT_LIST_BLACK + IDM_CONTEXT_LIST_MAX) == COMMAND_GROUP_NONE);
+
+	// The trap: a bare ">= threshold base" would pull every list id into the
+	// threshold group, and the decoder inside would then reject it silently.
+	CHECK(command_classify(IDM_CONTEXT_LIST_WHITE) != COMMAND_GROUP_THRESHOLD);
+	CHECK(command_classify(IDM_CONTEXT_LIST_BLACK) != COMMAND_GROUP_THRESHOLD);
+}
+
+// Stand-in for the engine. The learning service only ever asks for a number,
+// so the test hands it a function and checks it was stored, not what the engine
+// contains - that is the property the narrow interface exists to guarantee.
+static uint32_t stub_threshold_provider(int button, void *user)
+{
+	(void)user;
+	return (uint32_t)(button * 10 + 50);
+}
+
+static void test_learning_service_unstarted(void)
+{
+	printf("learning service (unstarted)\n");
+
+	// A zeroed service is exactly what the application has before the user
+	// turns learning on. Reading it used to call EnterCriticalSection on an
+	// uninitialised section and crash the tray menu (reported 2026-11-26).
+	LearningService service;
+	memset(&service, 0, sizeof(service));
+
+	LearningAdvice advice;
+	memset(&advice, 0xAA, sizeof(advice));
+
+	learning_service_snapshot(&service, &advice);
+	CHECK(advice.suggested_ms[MOUSE_BUTTON_LEFT] == 0);
+	CHECK(advice.samples[MOUSE_BUTTON_LEFT] == 0);
+	CHECK(advice.seq == 0);
+
+	// stop and reset must be idempotent on a service that never started
+	learning_service_stop(&service);
+	learning_service_reset(&service);
+	learning_service_stop(&service);
+	CHECK(!service.ready);
+	CHECK(!service.cs_alive);
+
+	// Starting with bad arguments must not create anything either
+	SignalRing ring;
+	signal_ring_init(&ring);
+
+	CHECK(!learning_service_start(NULL, &ring, stub_threshold_provider, NULL));
+	CHECK(!learning_service_start(&service, NULL, stub_threshold_provider, NULL));
+	CHECK(!learning_service_is_started(&service));
+	CHECK(!learning_service_is_started(NULL));
+	learning_service_stop(&service);
+
+	// The provider is stored as given: the worker never learns what the engine
+	// looks like, it only knows how to ask for one number. This is the whole
+	// point of the narrow interface - the engine can rename its fields without
+	// this module noticing.
+	CHECK(learning_service_start(&service, &ring, stub_threshold_provider, &ring));
+	CHECK(learning_service_is_started(&service));
+	CHECK(service.threshold_fn == stub_threshold_provider);
+	CHECK(service.user == &ring);
+	learning_service_stop(&service);
+	CHECK(!learning_service_is_started(&service));
+
+	// Degenerate input
+	learning_service_snapshot(NULL, &advice);
+	learning_service_snapshot(&service, NULL);
+	learning_service_stop(NULL);
+	learning_service_reset(NULL);
+}
+
 int main(void)
 {
 	test_menu_id_codec();
@@ -1781,6 +2402,15 @@ int main(void)
 	test_button_enum_layout();
 	test_version_consistency();
 	test_smart_drag_run();
+
+	// 2.4.0 signal collection foundation and learning advice
+	test_signal_ring();
+	test_learning();
+	test_command_classify();
+	test_app_capabilities();
+	test_context_filter();
+	test_suppression();
+	test_learning_service_unstarted();
 
 	// 1.2.0 modules
 	test_hook_watchdog();

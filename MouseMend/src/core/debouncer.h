@@ -69,18 +69,6 @@ typedef struct
 	// release keeps it true to what Windows has actually received.
 	bool system_down;
 
-	// Replay: a press that arrived while a release was still held back is
-	// swallowed and re-injected by the timer together with that release.
-	//
-	// It cannot be injected here. The callback runs on the thread that owns the
-	// hook, and injecting from that stack makes SendInput wait for itself.
-	bool pending_replay;	 // Swallowed press waiting for the timer
-	bool replay_in_flight;	 // Timer is injecting it right now
-	bool release_after_replay; // A real release arrived during the injection
-	uint32_t replay_down_flags;
-	uint32_t replay_down_data;
-	POINT replay_point;		 // Where the swallowed press happened
-	uint64_t replay_press_time;
 } __declspec(align(64)) ButtonDebounceData;
 
 // Debounce manager with cache line alignment for performance
@@ -116,7 +104,6 @@ typedef enum
 	DEBOUNCE_REASON_BLOCK_RELEASE,	   // Release belonging to a blocked press
 	DEBOUNCE_REASON_BLOCK_WHEEL_REVERSAL,
 	DEBOUNCE_REASON_DEFER_RELEASE,	   // Release held back on purpose (Smart Drag)
-	DEBOUNCE_REASON_PASS_FLUSHED,	   // Press that first delivered a held release
 	DEBOUNCE_REASON_IGNORE_INJECTED,
 	DEBOUNCE_REASON_IGNORE_UNMONITORED,
 	DEBOUNCE_REASON_IGNORE_WHEEL_ZERO,
@@ -129,12 +116,6 @@ typedef struct
 	DebounceReason reason;
 	bool blocked;		  // Same value debounce_process_event returns
 	bool deferred;		  // This release was held back
-	bool flushed_deferred; // A held release was delivered before this press
-
-	// This press was swallowed and will be replayed by the timer right after
-	// that release. It is NOT a blocked false click: counters, the block log and
-	// the balloon all have to skip it.
-	bool replay;
 	bool first_event;	  // No earlier event for this button in this session
 	uint64_t elapsed_ms;   // Time since the previous event of this button
 
@@ -179,6 +160,13 @@ bool debounce_process_event(DebounceManager *manager, const MouseEvent *event);
 
 // Same as above, but also reports why. decision may be NULL.
 bool debounce_process_event_ex(DebounceManager *manager, const MouseEvent *event, DebounceDecision *decision);
+
+// Same as above, but suppress_block turns every rejection into a full PASS.
+// Used by the hook when the current foreground program is excluded or filtering
+// is temporarily paused. All shared bookkeeping still runs, so system_down and
+// isBlocked describe what the system actually received.
+bool debounce_process_event_ex_suppressed(DebounceManager *manager, const MouseEvent *event,
+										  DebounceDecision *decision, bool suppress_block);
 
 // Set threshold for a specific button
 void debounce_set_threshold(DebounceManager *manager, MouseButton button, uint32_t threshold_ms, uint32_t min_threshold_ms, uint32_t max_threshold_ms);
@@ -256,9 +244,9 @@ bool debounce_take_injection_failure(void);
 
 // Replace the injection sink. NULL restores the real SendInput.
 //
-// Exists so the replay sequence can be asserted - order, flags and coordinates -
-// without clicking the desktop the tests happen to run on. The structural guard
-// (never inject from inside the hook) still applies to whatever sink is set.
+// Exists so tests can observe deferred releases without clicking the desktop
+// they happen to run on. The structural guard (never inject from inside the
+// hook) still applies to whatever sink is set.
 typedef bool (*DebounceInjectionFn)(const INPUT *inputs, UINT count);
 void debounce_set_injection_sink(DebounceInjectionFn sink);
 
@@ -267,14 +255,5 @@ void debounce_set_injection_sink(DebounceInjectionFn sink);
 // release without a way to deliver it is how a button ends up pressed forever.
 void debounce_set_defer_available(DebounceManager *manager, bool available);
 
-// Whether anything still needs the timer: a held release or a pending replay
+// Whether a held release still needs the deferred-release timer.
 bool debounce_has_pending_work(DebounceManager *manager);
-
-// Run queued replays. Must only be called from the timer, never from the hook.
-// Injects the held release first and then the press that was swallowed behind
-// it, so the system sees the same order it would have seen without the filter.
-void debounce_service_replay(DebounceManager *manager);
-
-// Forget queued replays without running them. Used on shutdown, where a press
-// replayed into a dying process is pointless and only risks a stuck button.
-void debounce_drop_replays(DebounceManager *manager);

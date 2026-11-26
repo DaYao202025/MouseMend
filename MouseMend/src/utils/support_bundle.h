@@ -22,6 +22,12 @@
 #define SUPPORT_EVENT_MAX EVENT_HISTORY_CAPACITY
 #define SUPPORT_KEEP_BUNDLES 3
 
+// A Chinese account name in a deep profile directory can push a destination
+// past MAX_PATH. Every path built by the writer uses this instead, so the
+// candidate folders are not silently skipped just before the one that would
+// have worked.
+#define SUPPORT_PATH_CHARS 1024
+
 // File name prefixes. They are also the retention groups: pruning never deletes
 // a file it did not create.
 #define SUPPORT_PREFIX_CRASH L"MouseMend-crash"
@@ -86,6 +92,10 @@ typedef struct
 	// an error message. The second must stay at zero.
 	uint32_t injection_failures;
 	uint32_t injection_refused;
+
+	// Candidate folders that could not even be assembled. A bundle that was
+	// never written used to look identical to one the user simply did not find.
+	uint32_t path_failures;
 
 	// Process resources: a leak shows up here long before it kills the process
 	uint32_t handle_count;

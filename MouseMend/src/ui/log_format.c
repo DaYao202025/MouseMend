@@ -109,8 +109,6 @@ const wchar_t *log_format_verdict(DebounceReason reason)
 		return lang_str(STR_VERDICT_BLOCK_REVERSE);
 	case DEBOUNCE_REASON_DEFER_RELEASE:
 		return lang_str(STR_VERDICT_DEFER_RELEASE);
-	case DEBOUNCE_REASON_PASS_FLUSHED:
-		return lang_str(STR_VERDICT_PASS_FLUSHED);
 	case DEBOUNCE_REASON_IGNORE_INJECTED:
 		return lang_str(STR_VERDICT_IGNORE_INJECTED);
 	case DEBOUNCE_REASON_IGNORE_UNMONITORED:
@@ -174,6 +172,10 @@ void log_format_status(const AppSnapshot *snapshot, wchar_t *buffer, size_t buff
 						 snapshot->hook_recoveries);
 	else
 		StringCchCopyW(buffer, buffer_count, base);
+
+	// The capability summary is NOT appended here any more: it has its own four
+	// controls, each with its own colour. Keeping it inside this string meant the
+	// whole sentence had to be repainted whenever any one of them changed.
 }
 
 void log_format_lf_to_crlf(const wchar_t *source, wchar_t *destination, size_t destination_count)

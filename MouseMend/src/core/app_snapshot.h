@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "app_capabilities.h"
 #include "debouncer.h"
 #include "mouse_hook.h"
 
@@ -11,7 +12,8 @@
 // snapshot and writes through the AppController. That keeps the UI thin and
 // keeps the core testable without a window.
 
-#define APP_SNAPSHOT_LOG_DIR_SIZE 260
+// A Chinese account name plus a deep profile directory can exceed MAX_PATH.
+#define APP_SNAPSHOT_LOG_DIR_SIZE 1024
 
 // Evidence for the self check: the most recent press the engine refused for a
 // button, plus the gap that produced the decision. Recorded by the hook, read by
@@ -44,6 +46,14 @@ typedef struct
 	bool logging;
 	uint32_t release_delay_ms;
 	uint32_t drag_distance_px;
+
+	// State of each optional capability, so the window can show which part is
+	// not working instead of a single "on" that hides a dead module.
+	uint8_t capabilities[CAP_COUNT];
+
+	// Commands that arrived with no handler. Non-zero means a menu entry exists
+	// but nothing claims it - the "this does nothing" report, made countable.
+	uint32_t unhandled_menu_ids;
 
 	// Log directory, empty when it could not be resolved
 	wchar_t log_directory[APP_SNAPSHOT_LOG_DIR_SIZE];
