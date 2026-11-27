@@ -2,6 +2,7 @@
 #include "../core/app_snapshot.h"
 #include "../core/block_log.h"
 #include "../core/config.h"
+#include "../core/context_store.h"
 #include "../core/debouncer.h"
 #include "../core/mouse_hook.h"
 #include "../core/settings.h"
@@ -175,6 +176,38 @@ bool diagnostics_build(wchar_t *report, size_t report_count)
 
 	StringCchPrintfW(line, ARRAYSIZE(line), L"logging=%s\n", prefs.log_blocks ? L"on" : L"off");
 	StringCchCatW(report, report_count, line);
+
+	// Learning and the program lists used to be invisible in this report: the
+	// status row could show them, but a remote "the list does not work" report
+	// had no way to say whether they were even configured.
+	//
+	// This reports configuration only. Whether the worker or the polling thread
+	// is actually running lives in the live instance and cannot be read from
+	// here, so a "configured but dead" case still needs the status row.
+	StringCchPrintfW(line, ARRAYSIZE(line), L"learning_enabled=%s\n",
+					 prefs.learning_enabled ? L"on" : L"off");
+	StringCchCatW(report, report_count, line);
+
+	{
+		// Static, not stack: a policy copy is ~65 KB and the analyser flags
+		// anything near that size (C6262). This function only runs from the
+		// startup and diagnostic paths, on one thread at a time, and the call
+		// below rewrites the whole struct before it is read.
+		static ContextPolicy policy;
+		context_store_inspect(&policy);
+
+		const wchar_t *mode = (policy.mode == CONTEXT_MODE_WHITELIST)	? L"whitelist"
+							  : (policy.mode == CONTEXT_MODE_BLACKLIST) ? L"blacklist"
+																		: L"all";
+
+		StringCchPrintfW(line, ARRAYSIZE(line), L"context_mode=%s\n", mode);
+		StringCchCatW(report, report_count, line);
+
+		StringCchPrintfW(line, ARRAYSIZE(line), L"context_rules=white:%u black:%u\n",
+						 (unsigned)policy.whitelist.count,
+						 (unsigned)policy.blacklist.count);
+		StringCchCatW(report, report_count, line);
+	}
 
 	// Described, not created: a diagnostic run must not leave a Log folder behind
 	wchar_t log_directory[APP_SNAPSHOT_LOG_DIR_SIZE];

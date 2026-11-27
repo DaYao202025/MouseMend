@@ -36,6 +36,7 @@
 #include "src/core/context_filter.h"
 #include "src/core/context_service.h"
 #include "src/core/context_store.h"
+#include "src/core/status_notice.h"
 #include <commdlg.h>
 
 #pragma comment(lib, "comdlg32.lib")
@@ -115,6 +116,17 @@ typedef struct
 	LearningService learning;
 	ContextFilter context_filter;
 	ContextService context_service;
+
+	// One short lived message for the status bar at the bottom of whichever
+	// window is open. Lives here rather than in a window because the actions it
+	// reports happen in this file, often with no window open at all.
+	StatusNotice notice;
+
+	// Number of suggestions already announced, so the same count is not repeated
+	// on every refresh. Reset to zero when the advice disappears (adopted, or
+	// the threshold changed under it), which lets the same number be announced
+	// again the next time it appears.
+	uint32_t advice_notice_count;
 
 	// Blocked-click notification state
 	uint64_t notify_last_tick;
@@ -762,6 +774,7 @@ static bool InitializeApp(void)
 
 	signal_ring_init(&g_app.signals);
 	context_filter_init(&g_app.context_filter);
+	status_notice_init(&g_app.notice);
 	context_store_load(&g_app.context_filter.policy);
 	app_controller_attach_context(&g_app.controller, &g_app.context_filter);
 
@@ -1048,6 +1061,11 @@ static bool SaveSink(const DebounceManager *debounce, const Preferences *prefs, 
 	if (saved)
 		return true;
 
+	// A read-only registry makes every change disappear on the next start. The
+	// balloon says it once; this says it every time it happens, because "I
+	// changed it and it did not stick" is worth repeating.
+	status_notice_post(&g_app.notice, lang_str(STR_SB_SAVE_FAILED), 10000);
+
 	if (!warning_shown && g_app.tray_ready)
 	{
 		tray_icon_show_balloon(&g_app.tray_icon, lang_str(STR_APP_NAME), lang_str(STR_SAVE_FAILED), NIIF_WARNING);
@@ -1253,6 +1271,13 @@ static void RecoverHook(void)
 	g_app.hook_recoveries++;
 	UpdateTrayTooltip();
 
+	// The hook can be dropped while the user works in an elevated window, where
+	// protection stops and restarts with nothing on screen to say so. The balloon
+	// below is once per session; this line is throttled by the notice slot itself
+	// (identical text within 30 s is ignored), so a watchdog that trips
+	// repeatedly does not blink.
+	status_notice_post(&g_app.notice, lang_str(STR_SB_HOOK_RECOVERED), 8000);
+
 	// The counter restarted with the new hook, so the health baseline has to be
 	// taken again; otherwise the next check compares against the old hook's totals
 	hook_watchdog_init(&g_app.watchdog);
@@ -1417,6 +1442,67 @@ static void BuildSnapshot(AppSnapshot *snapshot, void *user)
 	snapshot->hook_recoveries = app->hook_recoveries;
 	snapshot->hook_active = IsHookActive();
 	snapshot->logging = app->prefs.log_blocks;
+
+	// What the filter is doing to the program in front. This is the one decision
+	// that had no visible answer anywhere in the window: the strip on top says
+	// whether the module is alive, not what it decided.
+	//
+	// The filter publishes into a double buffer - the writer fills the slot that
+	// is not current and then flips the index - so reading slots[current] here
+	// cannot observe a half written slot, and no lock is needed on this side.
+	{
+		const ContextSnapshot *context = &app->context_filter.snap;
+		LONG current = InterlockedCompareExchange(&app->context_filter.snap.current, -1, -1);
+
+		if (current < 0 || current > 1)
+			current = 0;
+
+		const ContextSlot *slot = &context->slots[current];
+
+		snapshot->context_verdict = slot->ours ? (uint8_t)APP_CONTEXT_OURS
+								   : slot->pid == 0 ? (uint8_t)APP_CONTEXT_NONE
+								   : slot->suppressed ? (uint8_t)APP_CONTEXT_EXEMPT
+													  : (uint8_t)APP_CONTEXT_BLOCKED;
+
+		StringCchCopyW(snapshot->context_name, ARRAYSIZE(snapshot->context_name),
+					   slot->name);
+	}
+
+	// Self-learning is opt in and its advice only ever reached the user through
+	// the tray menu: someone who never opens that menu never learns there is
+	// anything to adopt. Announce a change in the count instead - once per
+	// change, not once per refresh - through the same slot as the other notices.
+	{
+		LearningAdvice advice;
+		uint32_t count = 0;
+
+		learning_service_snapshot(&app->learning, &advice);
+		count = learning_advice_visible_count(&advice);
+
+		if (count > 0 && count > app->advice_notice_count)
+		{
+			wchar_t text[STATUS_NOTICE_CHARS];
+
+			StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_SB_ADVICE_FMT), count);
+			status_notice_post(&app->notice, text, 10000);
+			app->advice_notice_count = count;
+		}
+		else
+		{
+			// Fewer suggestions than before means the user adopted one, or the
+			// threshold moved. Both are consequences of something the user just
+			// did; announcing "1 left" right after they clicked adopt sounds like
+			// the click did not work. Record the new count silently so a later
+			// increase is still announced.
+			app->advice_notice_count = count;
+		}
+	}
+
+	// Status bar message, if one is current. status_notice_current also drops an
+	// expired one, so the 400 ms refresh is what makes the text disappear - no
+	// second timer anywhere.
+	status_notice_current(&app->notice, snapshot->notice_text,
+						  ARRAYSIZE(snapshot->notice_text));
 
 	// Capability line: what is switched on, and whether it is actually working.
 	// This adapter is the only place that sees every module at once, so it is

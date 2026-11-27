@@ -73,6 +73,7 @@
     <ClCompile Include="..\src\core\mouse_hook.c" />
     <ClCompile Include="..\src\core\app_controller.c" />
     <ClCompile Include="..\src\core\app_snapshot.c" />
+    <ClCompile Include="..\src\core\status_notice.c" />
     <ClCompile Include="..\src\core\event_history.c" />
     <ClCompile Include="..\src\utils\support_bundle.c" />
     <ClCompile Include="..\src\utils\zip_writer.c" />

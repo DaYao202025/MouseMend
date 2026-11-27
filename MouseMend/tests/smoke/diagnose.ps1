@@ -50,6 +50,7 @@ Check 'diagnose exit code' $report.ExitCode 0
 
 foreach ($key in @('exe=', 'language=', 'profile=', 'protective_buttons=', 'hybrid=',
         'release_delay_ms=', 'drag_distance_px=', 'notify_blocks=', 'logging=',
+        'learning_enabled=', 'context_mode=', 'context_rules=',
         'log_dir=', 'hook_install=', 'status=',
         'hover_text_chars=', 'settings_writable=', 'autostart=', 'result=')) {
     Check "report contains $key" ($report.Text -match [regex]::Escape($key)) $true

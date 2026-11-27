@@ -116,7 +116,12 @@ else {
 
 # The file list comes from git, so .gitignore decides what is published and
 # the two scratch files never travel.
-$paths = @(& git ls-files)
+# core.quotepath=false is required, not cosmetic: with the default true, git
+# returns a non-ASCII path escaped and wrapped in quotes ("\345\256\236..."),
+# and every later git call then treats those quote characters as part of the
+# file name - "could not open" for a file that plainly exists. The rules file
+# under .codebuddy/ has a Chinese name, which is how this surfaced.
+$paths = @(& git -c core.quotepath=false ls-files)
 Write-Host ("tracked files: {0}" -f $paths.Count)
 
 # Screenshots are published on purpose; everything else that looks like a
@@ -141,8 +146,8 @@ if ($forbidden) {
 # CRLF still hashes to the LF blob and is not reported as a false mismatch.
 $mismatch = 0
 foreach ($p in $paths) {
-    $wt = (& git hash-object "--path=$p" -- $p).Trim()
-    $blob = ((& git ls-files -s -- $p) -split '\s+')[1]
+    $wt = (& git -c core.quotepath=false hash-object "--path=$p" -- $p).Trim()
+    $blob = ((& git -c core.quotepath=false ls-files -s -- $p) -split '\s+')[1]
     if ($wt -ne $blob) {
         Write-Host ("  differs from the index: {0}" -f $p) -ForegroundColor Red
         $mismatch++

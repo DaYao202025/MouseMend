@@ -1,6 +1,7 @@
 # 设计方案：把延迟松手的注入移出钩子回调
 
-状态：**v1 已被评审否决，v2 见 §9；未实施**
+状态：**v1 已被评审否决，v2 见 §9；已实施** —— 代码在 `debouncer.c` 的延迟释放
+路径与 `release_delay_ms` 设置，实施清单见 `impl-deferred-release.md`
 日期：2026-11-25
 关联：`debouncer.c` / `main.c`
 

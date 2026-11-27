@@ -6,8 +6,14 @@
 
 #define CONTEXT_RAW_CHARS (CONTEXT_LIST_MAX * CONTEXT_PATH_CHARS + 2)
 
-// One static buffer shared by the reader and the writer. The store is only
-// touched from the UI thread (startup and menu actions), never from the hook.
+// One static buffer shared by the reader and the writer.
+//
+// NOT THREAD SAFE. That is safe today only because the store is touched from the
+// UI thread alone - startup and menu actions - and never from the hook or the
+// polling thread. If that ever stops being true (a settings import, the support
+// bundle, anything moved off the UI thread), pass a caller-owned buffer instead
+// of widening this one; two threads sharing it would corrupt both directions at
+// once and the symptom would be a silently truncated list.
 static wchar_t g_raw[CONTEXT_RAW_CHARS];
 
 static bool read_dword(HKEY key, LPCWSTR name, DWORD *out)
@@ -269,6 +275,28 @@ void context_store_load(ContextPolicy *policy)
 	// marks the settings dirty on a run where the user changes nothing.
 	if (migrated)
 		context_store_save(policy);
+}
+
+void context_store_inspect(ContextPolicy *policy)
+{
+	if (!policy)
+		return;
+
+	memset(policy, 0, sizeof(*policy));
+	policy->mode = CONTEXT_MODE_ALL;
+
+	HKEY key;
+	if (RegOpenKeyExW(HKEY_CURRENT_USER, REG_SETTINGS_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS)
+		return;
+
+	DWORD mode = 0;
+	if (read_dword(key, L"ContextMode", &mode) && mode < (DWORD)CONTEXT_MODE_COUNT)
+		policy->mode = (ContextMode)mode;
+
+	read_multi_sz(key, L"WhitelistExes", &policy->whitelist);
+	read_multi_sz(key, L"BlacklistExes", &policy->blacklist);
+
+	RegCloseKey(key);
 }
 
 bool context_store_save(const ContextPolicy *policy)

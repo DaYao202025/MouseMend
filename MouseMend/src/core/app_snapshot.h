@@ -5,6 +5,7 @@
 #include "app_capabilities.h"
 #include "debouncer.h"
 #include "mouse_hook.h"
+#include "status_notice.h"
 
 // Read-only view of the application state, used by the settings window.
 //
@@ -14,6 +15,24 @@
 
 // A Chinese account name plus a deep profile directory can exceed MAX_PATH.
 #define APP_SNAPSHOT_LOG_DIR_SIZE 1024
+
+// Program name of the foreground context, same length the filter uses. Kept as
+// a literal here so the window does not have to include the filter header just
+// to size a buffer.
+#define APP_SNAPSHOT_CONTEXT_NAME 64
+
+// What the context filter decided for the program currently in front.
+//
+// The distinction that matters is the one the user cannot see today: whether
+// this very program is being intercepted or let through. The strip on top says
+// whether the module is alive, not what it decided.
+typedef enum
+{
+	APP_CONTEXT_NONE = 0, // nothing published yet, or the lookup failed
+	APP_CONTEXT_OURS,	  // our own window, never filtered
+	APP_CONTEXT_EXEMPT,	  // the filter is letting it through
+	APP_CONTEXT_BLOCKED	  // the filter is intercepting it
+} AppContextVerdict;
 
 // Evidence for the self check: the most recent press the engine refused for a
 // button, plus the gap that produced the decision. Recorded by the hook, read by
@@ -54,6 +73,16 @@ typedef struct
 	// Commands that arrived with no handler. Non-zero means a menu entry exists
 	// but nothing claims it - the "this does nothing" report, made countable.
 	uint32_t unhandled_menu_ids;
+
+	// What the context filter decided for the program currently in front, and
+	// its name. Filled by the caller that owns the filter, not by
+	// app_snapshot_fill: the engine half has no reason to know about it.
+	uint8_t context_verdict;
+	wchar_t context_name[APP_SNAPSHOT_CONTEXT_NAME];
+
+	// The most recent status bar message, empty when there is none. Copied here
+	// from the notice slot so the window never reaches into application state.
+	wchar_t notice_text[STATUS_NOTICE_CHARS];
 
 	// Log directory, empty when it could not be resolved
 	wchar_t log_directory[APP_SNAPSHOT_LOG_DIR_SIZE];

@@ -313,6 +313,37 @@ $rel  = GET /repos/<owner>/<repo>/releases/tags/vX.Y.Z
 | 附件上传 401 | 用了 `api.github.com` 而不是 `uploads.github.com` | 换域名，`Content-Type: application/octet-stream` |
 | 单测版本一致性断言挂 | `version.h` 里宽窄两个字符串只改了一个 | 三处一起改 |
 | x86 单测找不到文件 | 产物在 `tests\bin\Win32\Release\` | 路径写 Win32 |
+
+---
+
+## 8. 截图更新（界面有变化时才需要）
+
+README 引用 `doc/screenshots/` 里的 6 张图，**文件名固定**，jsDelivr 按路径缓存，
+所以覆盖同名图之后 CDN 仍然返回旧内容。
+
+1. **重新截图，保持客户区规格**。`checkup-*.png` 是客户区（不含标题栏）。
+   做法：`PrintWindow(hwnd, hdc, PW_RENDERFULLCONTENT)` 画到整窗大小的位图，
+   再按 `ClientToScreen(hwnd, {0,0})` 与 `GetWindowRect` 的差，裁掉边框和标题栏。
+2. 覆盖文件并提交。
+3. **purge 缓存**，每张变动的图各请求一次：
+
+```
+https://purge.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-zh.png
+```
+
+返回 `{"status":"finished"}` 只说明请求被接受，**不代表内容已经换了**。
+4. **比 SHA-256**：本地文件与 CDN 下载回来的内容必须一致。
+
+```powershell
+(Get-FileHash doc\screenshots\checkup-zh.png -Algorithm SHA256).Hash
+```
+
+**为什么第 3、4 步不能省**：不 purge 用户看到的是旧界面；只 purge 不比对，purge
+失败时同样看不出来 —— 两种情况都表现为"README 的图和程序不一致"，而且**没有任何
+测试会告诉你**。
+
+**换图时注意**：截图里的自检区会显示 exe 的完整路径。只要路径里不含用户名，
+项目接受这一点（既有截图就是这样）；但**不要把含个人账户名的路径截进去**。
 | `stuck_key.ps1` 输出 SKIP | 会话锁定，不是失败 | 解锁后重跑一次 |
 
 ---

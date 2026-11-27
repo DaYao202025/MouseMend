@@ -169,6 +169,7 @@
     <ClCompile Include="..\..\src\core\context_filter.c" />
     <ClCompile Include="..\..\src\core\context_service.c" />
     <ClCompile Include="..\..\src\core\context_store.c" />
+    <ClCompile Include="..\..\src\core\status_notice.c" />
     <ClCompile Include="..\..\src\core\command_classify.c" />
     <ClCompile Include="..\..\src\core\app_capabilities.c" />
     <ClCompile Include="..\..\src\ui\about_window.c" />
@@ -179,6 +180,7 @@
     <ClCompile Include="..\..\src\ui\log_format.c" />
     <ClCompile Include="..\..\src\ui\ripple_view.c" />
     <ClCompile Include="..\..\src\ui\settings_window.c" />
+    <ClCompile Include="..\..\src\ui\status_bar.c" />
     <ClCompile Include="..\..\src\ui\window_layout.c" />
     <ClCompile Include="..\..\src\ui\tray_icon.c" />
     <ClCompile Include="..\..\src\utils\autostart.c" />

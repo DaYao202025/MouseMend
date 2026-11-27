@@ -1,6 +1,7 @@
 #include "settings_window.h"
 #include "language.h"
 #include "help_window.h"
+#include "status_bar.h"
 #include "window_layout.h"
 #include "../../resource.h"
 #include "../core/config.h"
@@ -99,6 +100,8 @@ static void update_filter_tooltips(HWND hDlg, SettingsWindow *window);
 static void refresh_capabilities(HWND hDlg, SettingsWindow *window,
 								 const uint8_t states[CAP_COUNT], bool hook_active);
 static void status_strip_set_caption(SettingsWindow *window, int index);
+static void update_status_bar(HWND hDlg, SettingsWindow *window,
+							  const AppSnapshot *snapshot);
 static void set_anim_rate(HWND hDlg, SettingsWindow *window, bool fast);
 
 // Store the window state on the dialog (modeless dialogs have no DWLP_USER by
@@ -487,6 +490,11 @@ static void refresh_live(HWND hDlg, SettingsWindow *window)
 	// strip derives block 0 from this same flag, so there is nothing to set here;
 	// refresh_capabilities takes care of it and only repaints on a real change.
 	refresh_capabilities(hDlg, window, snapshot.capabilities, snapshot.hook_active);
+
+	// Bottom bar: the foreground verdict is the one decision that used to have no
+	// visible answer anywhere. status_bar_set compares before writing, so this
+	// 400 ms path does not repaint a caption that has not changed.
+	update_status_bar(hDlg, window, &snapshot);
 
 	// Only touch a control when its text actually changed: repainting identical
 	// strings every tick is pointless work on the thread that also runs the hook.
@@ -1186,6 +1194,62 @@ static void refresh_capabilities(HWND hDlg, SettingsWindow *window,
 		InvalidateRect(control, NULL, FALSE);
 }
 
+// The bottom bar: one column for the foreground verdict, one for messages that
+// have nowhere else to go.
+//
+// 120 DLU is enough for "已拦截：某某程序.exe" and deliberately less than a
+// quarter of the window. This bar is meant to carry more later, and a first
+// column that eats the row would leave those no room.
+static const StatusBarPart SETTINGS_STATUS_PARTS[] = {
+	{120, NULL}, // foreground verdict
+	{0, NULL},	 // messages: takes whatever is left
+};
+
+// Fill the first column from the snapshot.
+//
+// The wording follows the verdict, not the module state. What the user needs to
+// know is whether the program in front is being intercepted - the strip on top
+// already answers whether the context module is alive, and repeating that here
+// would waste the only column that has new information in it.
+static void update_status_bar(HWND hDlg, SettingsWindow *window,
+							  const AppSnapshot *snapshot)
+{
+	if (!hDlg || !window || !snapshot)
+		return;
+
+	wchar_t text[SETTINGS_STATUS_SIZE];
+
+	switch (snapshot->context_verdict)
+	{
+	case APP_CONTEXT_OURS:
+		StringCchCopyW(text, ARRAYSIZE(text), lang_str(STR_SB_CONTEXT_OURS));
+		break;
+
+	case APP_CONTEXT_EXEMPT:
+		StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_SB_CONTEXT_EXEMPT_FMT),
+						 snapshot->context_name);
+		break;
+
+	case APP_CONTEXT_BLOCKED:
+		StringCchPrintfW(text, ARRAYSIZE(text), lang_str(STR_SB_CONTEXT_BLOCKED_FMT),
+						 snapshot->context_name);
+		break;
+
+	default:
+		// Nothing published yet, or the lookup failed. Both mean "not
+		// identified", and saying so is better than inventing a verdict.
+		StringCchCopyW(text, ARRAYSIZE(text), lang_str(STR_SB_CONTEXT_NONE));
+		break;
+	}
+
+	status_bar_set(hDlg, IDC_STATUSBAR, 0, text);
+
+	// Second column: whatever the application last had to report. An empty
+	// string clears it, which is what status_bar_set sees once the notice has
+	// expired - so the text disappears without a timer of its own.
+	status_bar_set(hDlg, IDC_STATUSBAR, 1, snapshot->notice_text);
+}
+
 // Repoint the hover tips at the active language
 // The tooltip keeps the pointer it was given, so the text has to be replaced as
 // well; leaving it alone would show the old language after a switch.
@@ -1468,6 +1532,12 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		// Hand-drawn text has to select the dialog font itself; without this it
 		// would come out in the stock system font and look foreign.
 		window->base_font = (HFONT)SendMessageW(hDlg, WM_GETFONT, 0, 0);
+
+		// The status bar inherits that same font, so the two never disagree about
+		// text size. A failure here means the control class is not registered;
+		// the window still works, it just has one less place to report.
+		status_bar_attach(hDlg, IDC_STATUSBAR, SETTINGS_STATUS_PARTS,
+						  ARRAYSIZE(SETTINGS_STATUS_PARTS));
 
 		// 0xFF is not a valid state, so the first refresh fills every caption
 		// instead of treating "disabled" as "already drawn and unchanged".

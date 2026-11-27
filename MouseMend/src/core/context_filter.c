@@ -28,6 +28,44 @@ void context_file_name_from_path(const wchar_t *path, wchar_t *name, size_t coun
 	StringCchCopyW(name, count, last);
 }
 
+void context_shorten_path(const wchar_t *full_path, wchar_t *out, size_t count)
+{
+	wchar_t head[CONTEXT_MENU_PATH_CHARS];
+	size_t length;
+	size_t tail;
+
+	if (!out || count == 0)
+		return;
+
+	out[0] = L'\0';
+
+	if (!full_path || !full_path[0])
+		return;
+
+	length = wcslen(full_path);
+
+	if (length < CONTEXT_MENU_PATH_CHARS)
+	{
+		StringCchCopyW(out, count, full_path);
+		return;
+	}
+
+	// Keep the tail, because that is where the file name is - clipping from the
+	// right, which is what a menu does on its own, removes the only part that
+	// tells two same-named rules apart. Keep part of the head as well so the
+	// drive and the first directory stay readable.
+	tail = 28;
+
+	StringCchCopyNW(head, sizeof(head) / sizeof(head[0]), full_path, 26);
+
+	if (FAILED(StringCchPrintfW(out, count, L"%s…%s", head, full_path + length - tail)))
+	{
+		// The caller sized the buffer for less than a shortened path. Falling
+		// back to the bare name is better than an empty menu entry.
+		context_file_name_from_path(full_path, out, count);
+	}
+}
+
 bool context_path_matches(const wchar_t *rule, const wchar_t *full_path, const wchar_t *file_name)
 {
 	if (!rule || !rule[0] || !full_path)

@@ -1,5 +1,61 @@
 # Changelog / 更新记录
 
+## 2.4.2 — 2026-11-27
+
+### 新增 / Added
+
+- **窗口底部新增状态栏**：默认高度的原生状态栏，两格。第一格回答一个此前在界面上
+  完全看不到的问题——**当前前台程序正在被拦截还是被排除**
+  （`已拦截：chrome.exe` / `已排除：chrome.exe` / `本程序窗口` / `等待前台程序`）。
+  第二格暂时留空，用来放事件提示；后续新增的窗体共用同一套布局。
+  对话框高度从 299 DLU 增加到 311 DLU，**现有控件一个坐标都没有动**——挤压布局要
+  重排状态条、图表、两个文字窗格和四个按钮，那才是真正容易做坏的地方。
+  A native status bar at the bottom of the check-up window. Its first column
+  reports the one decision that had no visible answer before: whether the
+  program in front is being intercepted or exempted. The dialog grew by 12 DLU
+  and no existing control moved.
+- **状态栏第二格接入消息通道**：钩子被系统丢弃后自动恢复、配置写盘失败这两件事，
+  会在这里留一行文字（8 秒 / 10 秒后自动消失），气泡仍然只在第一次出现。同一句话
+  30 秒内重复不刷新，所以看门狗反复触发也不会一直闪。
+  消息存在应用层而不是窗口里：动作发生在 `main.c`，那时体检窗口可能根本没开；任何
+  打开的窗口在下次刷新时自己取走。也**不播报「已保存」**——滑块每拖一次就保存一次，
+  那样状态栏会变成滚动字幕。
+  A notice channel in the second status bar column. Hook recoveries and failed
+  saves leave a line that expires on its own, throttled so a watchdog that
+  trips repeatedly does not blink.
+- **学习建议生成后不再只能靠右键菜单发现**：建议此前只在托盘菜单里被动展示，用户不
+  右键就永远不知道有东西可采纳。现在体检窗口刷新时统计一次「可采纳建议数」，数量
+  **发生变化**时在状态栏留一行（`有 2 项阈值建议可在托盘菜单采纳`，10 秒），同一数量
+  不重复。
+  **只统计菜单实际显示的三个键**：X1/X2 的采样和建议是真实的，但菜单不渲染、采用时
+  也会跳过它们，数进去等于让用户去找一个不存在的东西。
+  Learning advice is counted on each refresh and announced when the count
+  changes, so a user who never opens the tray menu still learns there is
+  something to adopt. Side buttons are excluded on purpose.
+- **名单项只显示文件名，同名不同路径分不出来**：点哪个删除只能靠猜。现在显示完整
+  路径，过长时**在中间**省略（`C:\Users\…\bin\app.exe`）。
+  **不能在末尾省略**——菜单本来就是从右边裁剪，而文件名正好在右边，那样会把唯一
+  能区分的信息裁掉。
+  Tray list entries now show the full path, shortened in the middle when long,
+  so two rules with the same file name are distinguishable.
+
+### 修复 / Fixed
+
+- **认不出的前台程序会继承上一个程序的判定**：`OpenProcess` 失败时（提权进程、受保护
+  进程）上下文线程保留了上一次发布的槽，于是新程序被套用了旧程序的结论——两个方向
+  都错，而且界面上没有任何提示。现在发布 `pid = 0` 且「不豁免」，过滤器保持拦截状态。
+  代价是这类程序即使被用户手动排除也会被拦；影响面很小（它们几乎没有鼠标交互需求），
+  方向与项目其他部分一致：宁可多拦，不可漏拦。
+  When the foreground program could not be identified, the previous program's
+  verdict was silently applied to it. The slot is now published as "not exempt"
+  with pid 0, which keeps the filter armed.
+
+### 验证 / Verified
+
+四配置 Rebuild（含 `/analyze`）0 error 0 warning；单测 x64 / x86 **3360 / 0**；
+`audit_printf.py` **PROBLEMS: none**；`e2e` / `diagnose` / `stuck_key` 各 0 failure。
+真机截图确认状态栏贴底、高 22 px、第一格显示 `已拦截：msedge.exe`，且现有布局未被挤动。
+
 ## 2.4.1 — 2026-11-26
 
 ### 变更 / Changed

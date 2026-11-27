@@ -1,2 +1,6 @@
-# Local assistant workspace data (not part of the project)
-.codebuddy/
+# Local assistant workspace data. The rules are part of the project - they say how
+# work is expected to be done here - so they travel with the code. The memory is a
+# personal work log with internal details and stays local.
+.codebuddy/*
+!.codebuddy/rules/
+!.codebuddy/rules/**

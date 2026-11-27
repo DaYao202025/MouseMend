@@ -54,6 +54,9 @@
 #define IDC_HELP_TEXT                   1042
 #define IDC_HELP_CLOSE                  1043
 
+// Status bar at the bottom of the check-up window
+#define IDC_STATUSBAR                   1044
+
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED

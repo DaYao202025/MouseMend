@@ -72,13 +72,36 @@ static DWORD WINAPI context_thread(LPVOID param)
 			CloseHandle(process);
 		}
 
-		// A failed lookup keeps the previous published slot: publishing pid 0
-		// would either disable protection everywhere or match the wrong rule.
-		// The pid is forgotten on purpose so the next tick retries - an elevated
-		// program that did not answer once may answer the second time.
+		// The program in front could not be identified: elevated, protected, or
+		// a process that simply did not answer this tick.
+		//
+		// Keeping the previous slot - which is what this used to do - applies
+		// some other program's verdict to this one, in both directions and
+		// silently: whatever the last foreground programme was exempt from, this
+		// one is exempt from too, and vice versa. That is worse than either
+		// choice, because nothing on screen says it happened.
+		//
+		// So publish "not exempt" instead. pid 0 marks the slot as belonging to
+		// nobody, and suppressed = false keeps the filter armed, which is the
+		// rule this project follows everywhere else: block rather than let
+		// through. The pid is still forgotten so the next tick retries - an
+		// elevated programme that did not answer once may answer the second time.
+		//
+		// observed is deliberately left untouched: the status strip then reports
+		// the context module as waiting for data instead of claiming it works.
+		//
+		// KNOWN LIMITATION, left in place on purpose: policy.recent_name is not
+		// cleared here, because it feeds "exclude the program in front" in the
+		// tray menu and clearing it would remove that entry exactly when the user
+		// cannot tell what to exclude. The consequence is a visible mismatch -
+		// the status bar says "waiting for a program" while the menu still offers
+		// to exclude the last one that could be resolved. Fixing it properly needs
+		// a decision about what that menu entry should do with no known program,
+		// which is why it is a separate change and not part of this one.
 		if (!path[0] || !name[0])
 		{
 			last_pid = 0;
+			context_filter_publish(service->filter, 0, false, false, L"");
 			continue;
 		}
 

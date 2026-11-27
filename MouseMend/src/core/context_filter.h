@@ -20,6 +20,11 @@
 #define CONTEXT_LIST_MAX 16
 #define CONTEXT_PATH_CHARS 1024
 #define CONTEXT_NAME_CHARS 64
+
+// Longest path rendered into a menu line before it is shortened. A menu can
+// hold more, but past this the line starts competing with the rest of the
+// submenu for width.
+#define CONTEXT_MENU_PATH_CHARS 64
 #define CONTEXT_PAUSE_MS (5u * 60u * 1000u)
 
 typedef enum
@@ -141,3 +146,13 @@ bool context_snapshot_is_paused(const ContextSnapshot *snapshot, uint64_t now_ti
 
 // Extract the last component of a path. Shared by the service and the tests.
 void context_file_name_from_path(const wchar_t *path, wchar_t *name, size_t count);
+
+// Render a rule for a menu line: the path, shortened in the middle when it is
+// long.
+//
+// A bare file name made two rules on different paths look identical, and the
+// only way to learn which one a click would delete was to click it. A full path
+// is not the answer either: menus clip from the right, which is exactly where
+// the file name sits, so an overlong entry would lose the one part that
+// identifies it. Shortening in the middle keeps the drive and the name.
+void context_shorten_path(const wchar_t *full_path, wchar_t *out, size_t count);

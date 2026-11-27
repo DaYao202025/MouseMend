@@ -169,6 +169,7 @@
     <ClCompile Include="src\core\context_filter.c" />
     <ClCompile Include="src\core\context_service.c" />
     <ClCompile Include="src\core\context_store.c" />
+    <ClCompile Include="src\core\status_notice.c" />
     <ClCompile Include="src\ui\about_window.c" />
   <ClCompile Include="src\ui\help_window.c" />
     <ClCompile Include="src\ui\context_menu.c" />
@@ -177,6 +178,7 @@
     <ClCompile Include="src\ui\log_format.c" />
     <ClCompile Include="src\ui\ripple_view.c" />
     <ClCompile Include="src\ui\settings_window.c" />
+    <ClCompile Include="src\ui\status_bar.c" />
     <ClCompile Include="src\ui\window_layout.c" />
     <ClCompile Include="src\ui\tray_icon.c" />
     <ClCompile Include="src\utils\autostart.c" />
@@ -219,6 +221,8 @@
     <ClInclude Include="src\ui\log_format.h" />
     <ClInclude Include="src\ui\ripple_view.h" />
     <ClInclude Include="src\ui\settings_window.h" />
+    <ClInclude Include="src\ui\status_bar.h" />
+    <ClInclude Include="src\core\status_notice.h" />
     <ClInclude Include="src\ui\tray_icon.h" />
     <ClInclude Include="src\ui\window_layout.h" />
     <ClInclude Include="src\utils\autostart.h" />

@@ -201,6 +201,16 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_VERSION_NOTES_TEXT] =
 		L"Only published versions are listed, newest first.\n"
 		L"\n"
+		L"2.4.2  A status bar at the bottom answers a question nothing else did:\n"
+		L"       whether the program in front is being intercepted or let through.\n"
+		L"       Its second column carries short notices that fade on their own - a\n"
+		L"       hook Windows dropped and we restored, a settings save that failed.\n"
+		L"       Self-learning advice is announced when it appears instead of waiting\n"
+		L"       to be found in the tray menu. Fixed: two rules with the same file\n"
+		L"       name could not be told apart in the list; when Windows would not say\n"
+		L"       what the foreground program was, the previous program's verdict was\n"
+		L"       applied to it silently.\n"
+		L"\n"
 		L"2.4.1  The status row is five square status lights now, one per module, each\n"
 		L"       with its own hue. Hovering a block opens it to the right in a tenth of\n"
 		L"       a second; the first block stays open at rest. Fixed: self-learning\n"
@@ -339,6 +349,13 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_CAP_SHORT_LEARNING] = L"L",
 	[STR_CAP_SHORT_CONTEXT] = L"R",
 	[STR_CAP_SHORT_LOG] = L"G",
+	[STR_SB_CONTEXT_NONE] = L"Waiting for a program",
+	[STR_SB_CONTEXT_OURS] = L"This window",
+	[STR_SB_CONTEXT_EXEMPT_FMT] = L"Exempt: %s",
+	[STR_SB_CONTEXT_BLOCKED_FMT] = L"Blocking: %s",
+	[STR_SB_HOOK_RECOVERED] = L"Mouse hook restored",
+	[STR_SB_SAVE_FAILED] = L"Settings could not be saved and will be lost on restart",
+	[STR_SB_ADVICE_FMT] = L"%u threshold suggestion(s) waiting in the tray menu",
 	[STR_LEARNING_APPLIED_FMT] = L"Learning applied: %s",
 };
 
@@ -529,6 +546,12 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_VERSION_NOTES_TEXT] =
 		L"只列公开发布过的版本，新的在上面。\n"
 		L"\n"
+		L"2.4.2  窗口底部加了状态栏，回答一个别处没有答案的问题：当前这个程序正在\n"
+		L"       被拦截，还是被放行。第二格放临时提示，几秒后自己消失（钩子被系统\n"
+		L"       丢弃后自动恢复、配置写入失败）。自学习有了建议会在状态栏说一声，\n"
+		L"       不用再去托盘菜单里翻。修复：名单里同名不同路径的两条规则分不出来；\n"
+		L"       Windows 说不出前台程序是什么时，会静默套用上一个程序的判定。\n"
+		L"\n"
 		L"2.4.1  状态行改成五盏方块状态灯，每个模块一种颜色。鼠标移上去，那一块在\n"
 		L"       十分之一秒内向右展开；第一个块在静止时常开。修复：自学习可能建议出\n"
 		L"       一个会把正常双击吞掉的阈值；「采用」能绕过自己的 50% 限幅；从旧版\n"
@@ -645,6 +668,13 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_CAP_SHORT_LEARNING] = L"学",
 	[STR_CAP_SHORT_CONTEXT] = L"名",
 	[STR_CAP_SHORT_LOG] = L"志",
+	[STR_SB_CONTEXT_NONE] = L"等待前台程序",
+	[STR_SB_CONTEXT_OURS] = L"本程序窗口",
+	[STR_SB_CONTEXT_EXEMPT_FMT] = L"已排除：%s",
+	[STR_SB_CONTEXT_BLOCKED_FMT] = L"已拦截：%s",
+	[STR_SB_HOOK_RECOVERED] = L"已自动恢复鼠标钩子",
+	[STR_SB_SAVE_FAILED] = L"设置保存失败，重启后会丢失",
+	[STR_SB_ADVICE_FMT] = L"有 %u 项阈值建议可在托盘菜单采纳",
 	[STR_LEARNING_APPLIED_FMT] = L"已采用学习建议：%s",
 };
 

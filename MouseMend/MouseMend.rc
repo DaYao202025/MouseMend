@@ -87,12 +87,23 @@ IDI_NOTIFYICON          ICON                    "resources/notify.ico"
 // one the user selected. Dialog units keep the layout correct at any DPI.
 //
 
-IDD_SETTINGS DIALOGEX 0, 0, 477, 299
+// 311 instead of 299: the status bar needs 12 DLU that the footer buttons do
+// not leave (the close button's bottom edge is at 293). Growing the dialog is
+// the only way to add a bar without moving any existing control - shrinking the
+// layout would mean re-placing the strip, the chart, both panes and four
+// buttons, which is exactly the kind of change that breaks a template quietly.
+IDD_SETTINGS DIALOGEX 0, 0, 477, 311
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
 EXSTYLE WS_EX_APPWINDOW
 CAPTION ""
 FONT 9, "Segoe UI", 400, 0, 0x1
 BEGIN
+    // The bottom bar, created first so it sits under everything else in the
+    // z-order. Its geometry here is only a starting position: the control moves
+    // itself to the bottom of the client area on WM_SIZE and takes its height
+    // from the font, which is what keeps it correct at any DPI.
+    CONTROL         "", IDC_STATUSBAR, "msctls_statusbar32", WS_CHILD | WS_VISIBLE, 0, 299, 477, 12
+
     // The status strip: one owner-draw control painting five blocks - the
 // overall verdict, then one per optional module. Idle they are squares with one
 // dim character; the block under the pointer widens until its caption fits.

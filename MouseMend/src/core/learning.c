@@ -86,3 +86,24 @@ void learning_advice_from_ring(LearningAdvice *advice, const SignalRing *ring,
 		advice->seq += advice->samples[i];
 	}
 }
+
+uint32_t learning_advice_visible_count(const LearningAdvice *advice)
+{
+	// The same three buttons the menu renders and adoption touches. Side buttons
+	// are excluded on purpose: their advice is real but unreachable from the
+	// menu, so counting it would announce something the user cannot act on.
+	static const MouseButton shown[] = {MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT,
+										MOUSE_BUTTON_MIDDLE};
+	uint32_t count = 0;
+
+	if (!advice)
+		return 0;
+
+	for (int k = 0; k < (int)(sizeof(shown) / sizeof(shown[0])); k++)
+	{
+		if (advice->suggested_ms[shown[k]] != 0)
+			count++;
+	}
+
+	return count;
+}

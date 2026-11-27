@@ -1,0 +1,46 @@
+---
+description: 提交、发布与测试的硬性红线，违反就停下
+alwaysApply: true
+enabled: true
+updatedAt: 2026-11-27T08:10:00.000Z
+provider:
+---
+
+提交或发布前必须满足。**违反任何一条就停下，不要"下次注意"。**
+
+## 安全
+
+仓库是 **public**，写进去就等于发到网上。
+
+- 不写：凭据位置、令牌类型、scopes、内网地址、机器名、个人目录路径。
+- 提交前扫三样，缺一不可：
+  - 当前文件里的令牌 / 私钥形态
+  - 被跟踪的证书文件（`.pfx` `.cer` `.pem` `.key`）
+  - **历史里的可疑串**（`git log --all -S`）—— 改文件删不掉历史，这一条最容易漏
+- 凭据一旦怀疑泄露，**只认轮换**，不认"改文档删掉"。
+
+## 提交
+
+- 一次提交一件事。代码 / exe 入库 / exe 撤出 / 文档，各自独立。
+- 精确 `git add`，不用 `git add -A`。
+- 提交信息写**为什么**，不写"改了什么"。`fix bug` 等于没写。
+
+## 发布
+
+- `bin/` 和 `*.exe` 不能留在 git 索引里，否则发布脚本直接中止；exe 走 Release 附件。
+- 先 `-DryRun`，确认输出的 `parents:` 是**远端 main**。
+- 改了根 README 的 `Latest release` 之后要**再发布一次**。
+- 发布后核对三件事：`main == tag`、Release 不是 draft、两个 exe 大小与本地一致。
+- 远端 tag 不会自动跟随，必须 `PATCH /git/refs/tags/<tag>` 指向远端 main。
+
+## 测试
+
+- 单测挂了就是真的，**不许删断言或跳过测试来"通过"**。
+- 冒烟测试 **SKIP 不等于通过**；发布前必须真正跑过一次。
+- 改了判定逻辑，单测数字应当变化；没变就说明新行为没被覆盖。
+
+## 去哪找细节
+
+- 项目事实、模块契约、已知坑：`.codebuddy/memory/MEMORY.md`
+- 发布的十步流程与全部踩坑：`MouseMend/doc/publish-runbook.md`
+- 发布为什么走 REST API：`MouseMend/doc/github-publishing.md`

@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.4.1-blue.svg)
+![Version](https://img.shields.io/badge/version-2.4.2-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-informational.svg)
 ![Toolset](https://img.shields.io/badge/toolset-MSVC%20v145-purple.svg)
@@ -141,6 +141,10 @@ from the engine.
 * **Newest first** — the most recent click is on top.
 * **Live language switch** — changing the language from the tray menu repaints
   the open window immediately.
+* **Status bar** — the bottom row answers a question nothing else answered: whether
+  the program in front of you *right now* is being intercepted or let through.
+  Its second column carries short notices (a hook Windows dropped and we restored,
+  a settings save that failed) that disappear on their own.
 
 <p align="center">
   <img src="https://fastly.jsdelivr.net/gh/DaYao202025/MouseMend@main/MouseMend/doc/screenshots/checkup-zh.png" width="430" alt="Check-up window, Chinese UI">
@@ -205,6 +209,11 @@ Windows drop the hook.
   hook recovery in that situation — that is the expected behaviour.
 * **Some security software blocks low-level hooks.** If the hook cannot be
   installed at all, `--diagnose` says so. MouseMend does not fight for it.
+* **A program that cannot be identified is filtered, not exempted.** Windows
+  sometimes refuses to say what the foreground program is (protected or elevated
+  processes). The filter then stays on instead of inheriting the previous
+  program's verdict, so a program you excluded can still be filtered while it is
+  unidentified. The status bar shows `waiting for a program` at that moment.
 * **It only filters the mouse.** Keyboard chatter is out of scope.
 
 ### Privacy
@@ -314,6 +323,8 @@ MouseMend 常驻托盘，在软件层过滤鼠标事件流 —— 让磨损的�
 * **筛选** —— `自动` 显示全部按键；取消勾选后只看单个按键。
 * **最新在最上面** —— 刚发生的事不需要滚动就能看到。
 * **语言热切换** —— 从托盘菜单改语言，开着的窗口立刻重绘。
+* **底部状态栏** —— 回答一个别处都没有答案的问题：**当前这个程序正在被拦截，还是被放行**。
+  第二格放临时提示（钩子被系统丢弃后自动恢复、配置写盘失败），几秒后自己消失。
 
 ### 托盘操作
 
@@ -391,6 +402,9 @@ MouseMend-x64.exe --diagnose    打印只读自检报告后退出
   一次钩子恢复 —— 那是预期行为。
 * **部分安全软件会拦截低级钩子。** 如果钩子根本装不上，`--diagnose` 会直说。
   MouseMend 不会去抢。
+* **认不出的程序按「被拦」处理。** Windows 有时不告诉我们前台程序是什么（受保护或提权的
+  进程）。这时过滤器保持开启，而不是沿用上一个程序的结论 —— 所以你排除过的程序在被认出
+  来之前仍可能被拦。那一刻状态栏显示「等待前台程序」。
 * **只管鼠标。** 键盘连击不在范围内。
 
 ### 隐私
@@ -450,10 +464,20 @@ src/core/
   settings.c                registry load / save
   app_controller.c          the only writer; mutations only touch memory
   app_snapshot.c            builds the read-only view for the window
+  app_capabilities.c        per-module health, so one dead module is visible
   notify_policy.c           balloon throttling (pure functions)
   block_log.c               queued daily log files
   event_trace.c             128 entry ring the hook writes into
+  event_history.c           second ring, kept for crash reports when no window is open
   hook_watchdog.c           detection of a silently removed hook
+  signal_ring.c             interval histogram feeding the learning advice
+  learning.c                P80 suggestion from that histogram (pure)
+  learning_service.c        background thread that recomputes the advice
+  command_classify.c        turns a raw command id into an action
+  context_filter.c          whitelist / blacklist matching, and the published slot
+  context_service.c         polls the foreground program into that slot
+  context_store.c           migration and persistence of the lists
+  status_notice.c           one short lived message for the status bar
 
 src/ui/
   settings_window.c         the check-up window (dialog, timers, controls)
@@ -463,7 +487,9 @@ src/ui/
   language.c                every user-visible string, both languages
   input_box.c               small modal prompt for a custom value
   about_window.c            the about dialog
+  help_window.c             the version notes / help dialog
   ripple_view.c             the click ripples in the test area
+  status_bar.c              thin wrapper over the native status bar
   window_layout.c           shared monitor-aware centering
 
 src/utils/
@@ -471,6 +497,10 @@ src/utils/
   diagnostics.c             --version / --diagnose
   crash_dump.c              minidump writer (dbghelp loaded at runtime)
   logger.c                  debug-only file log
+  hang_watchdog.c           detects an unresponsive UI thread
+  support_bundle.c          collects the files a report needs
+  zip_writer.c              minimal zip writer for that bundle
+  trace_log.c               debug-only trace of decisions
 
 tests/                      console test suite, no window required
   tools/audit_printf.py     static check: every format string versus its call site
@@ -595,7 +625,7 @@ Released under the MIT licence — see [LICENSE](LICENSE).<br>
 
 <div align="center">
 
-**MouseMend 2.4.1** — MIT licensed, built with plain C and the Win32 API.<br>
-**MouseMend 2.4.1** —— MIT 许可证，纯 C 与 Win32 API 实现。
+**MouseMend 2.4.2** — MIT licensed, built with plain C and the Win32 API.<br>
+**MouseMend 2.4.2** —— MIT 许可证，纯 C 与 Win32 API 实现。
 
 </div>

@@ -23,6 +23,7 @@
 #include "../src/core/app_capabilities.h"
 #include "../src/core/context_filter.h"
 #include "../src/core/learning_service.h"
+#include "../src/core/status_notice.h"
 #include "../src/ui/language.h"
 #include "../src/ui/log_format.h"
 #include "../src/utils/support_bundle.h"
@@ -1909,6 +1910,29 @@ static void test_learning(void)
 	learning_advice_from_ring(NULL, &ring, thresholds);
 	learning_advice_from_ring(&advice, NULL, thresholds);
 	CHECK(advice.suggested_ms[MOUSE_BUTTON_LEFT] == 0);
+
+	// Visible count: only the three buttons the menu renders and adoption
+	// touches. Side buttons can hold real advice the menu never shows, and
+	// counting it would announce something the user cannot act on.
+	{
+		LearningAdvice visible = {0};
+		LearningAdvice side_only = {0};
+
+		CHECK(learning_advice_visible_count(&visible) == 0);
+
+		visible.suggested_ms[MOUSE_BUTTON_LEFT] = 40;
+		CHECK(learning_advice_visible_count(&visible) == 1);
+
+		visible.suggested_ms[MOUSE_BUTTON_MIDDLE] = 60;
+		CHECK(learning_advice_visible_count(&visible) == 2);
+
+		// Advice sitting only on a side button must not be counted
+		side_only.suggested_ms[MOUSE_BUTTON_X1] = 40;
+		side_only.suggested_ms[MOUSE_BUTTON_X2] = 40;
+		CHECK(learning_advice_visible_count(&side_only) == 0);
+
+		CHECK(learning_advice_visible_count(NULL) == 0);
+	}
 }
 
 static void test_context_filter(void)
@@ -2089,6 +2113,43 @@ static void test_context_filter(void)
 	CHECK(!context_filter_is_paused(NULL, 0));
 	CHECK(context_filter_add_path(NULL, CONTEXT_MODE_BLACKLIST, L"C:\\x.exe") == CONTEXT_ADD_INVALID);
 	CHECK(!context_filter_remove_path(NULL, CONTEXT_MODE_BLACKLIST, L"C:\\x.exe"));
+
+	// Menu rendering. Two rules on different paths used to render identically -
+	// a bare file name - so the only way to learn which one a click would delete
+	// was to click it.
+	{
+		wchar_t line[128];
+		const wchar_t *long_path =
+			L"C:\\Users\\someone\\AppData\\Local\\Programs\\VeryLongVendorName\\Product\\bin\\app.exe";
+
+		// Short enough to keep whole
+		context_shorten_path(L"D:\\Games\\game.exe", line, ARRAYSIZE(line));
+		CHECK(wcscmp(line, L"D:\\Games\\game.exe") == 0);
+
+		// Long: shortened in the middle, and the file name has to survive. A menu
+		// clips from the right, which is exactly where the name sits.
+		CHECK(wcslen(long_path) >= CONTEXT_MENU_PATH_CHARS);
+		context_shorten_path(long_path, line, ARRAYSIZE(line));
+		CHECK(wcslen(line) < wcslen(long_path));
+		CHECK(wcsstr(line, L"…") != NULL);
+		CHECK(wcsstr(line, L"app.exe") != NULL);
+		CHECK(wcscmp(line + wcslen(line) - 7, L"app.exe") == 0);
+
+		// Two same-named rules on different paths must render differently
+		{
+			wchar_t other[128];
+
+			context_shorten_path(L"E:\\Games\\game.exe", other, ARRAYSIZE(other));
+			context_shorten_path(L"D:\\Games\\game.exe", line, ARRAYSIZE(line));
+			CHECK(wcscmp(line, other) != 0);
+		}
+
+		// Degenerate input never produces garbage
+		context_shorten_path(NULL, line, ARRAYSIZE(line));
+		CHECK(line[0] == L'\0');
+		context_shorten_path(L"", line, ARRAYSIZE(line));
+		CHECK(line[0] == L'\0');
+	}
 }
 
 static void test_suppression(void)
@@ -2389,6 +2450,54 @@ static void test_learning_service_unstarted(void)
 	learning_service_reset(NULL);
 }
 
+// Status bar messages. The slot has to expire on its own: the window only polls
+// it every 400 ms and keeps no timer for it, so an expiry that needed a caller
+// to check the clock would leave stale text on screen indefinitely.
+static void test_status_notice(void)
+{
+	StatusNotice notice;
+	wchar_t text[STATUS_NOTICE_CHARS];
+
+	status_notice_init(&notice);
+
+	// Nothing posted yet: false, and the buffer cleared rather than untouched
+	CHECK(!status_notice_current(&notice, text, ARRAYSIZE(text)));
+	CHECK(text[0] == L'\0');
+
+	// A posted message comes back verbatim
+	status_notice_post(&notice, L"hook restored", 5000);
+	CHECK(status_notice_current(&notice, text, ARRAYSIZE(text)));
+	CHECK(wcscmp(text, L"hook restored") == 0);
+
+	// An empty text retracts immediately, without waiting out the timer
+	status_notice_post(&notice, L"", 0);
+	CHECK(!status_notice_current(&notice, text, ARRAYSIZE(text)));
+
+	// Expiry is wall clock, so this needs a real sleep rather than a fake now
+	status_notice_post(&notice, L"brief", 1);
+	Sleep(20);
+	CHECK(!status_notice_current(&notice, text, ARRAYSIZE(text)));
+
+	// Repeat suppression: the same line inside the window must not refresh the
+	// timer, or a watchdog that trips every 30 s would pin the text forever
+	status_notice_post(&notice, L"same", 60000);
+	{
+		uint64_t shown = notice.shown_tick;
+
+		status_notice_post(&notice, L"same", 60000);
+		CHECK(notice.shown_tick == shown);
+	}
+
+	// A different line is not suppressed
+	status_notice_post(&notice, L"other", 60000);
+	CHECK(status_notice_current(&notice, text, ARRAYSIZE(text)));
+	CHECK(wcscmp(text, L"other") == 0);
+
+	// After cleanup every call is a no-op instead of touching a dead lock
+	status_notice_cleanup(&notice);
+	CHECK(!status_notice_current(&notice, text, ARRAYSIZE(text)));
+}
+
 int main(void)
 {
 	test_menu_id_codec();
@@ -2411,6 +2520,7 @@ int main(void)
 	test_context_filter();
 	test_suppression();
 	test_learning_service_unstarted();
+	test_status_notice();
 
 	// 1.2.0 modules
 	test_hook_watchdog();

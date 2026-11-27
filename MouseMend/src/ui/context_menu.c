@@ -198,7 +198,10 @@ static bool AddContextSubmenu(HMENU parent, const ContextPolicy *policy, bool wh
 			}
 			else
 			{
-				context_file_name_from_path(list->paths[i], line, ARRAYSIZE(line));
+				// The full path, not the bare file name: two rules on different
+				// paths used to render identically, so the only way to learn which
+				// one a click would delete was to click it.
+				context_shorten_path(list->paths[i], line, ARRAYSIZE(line));
 			}
 
 			InsertMenuW(submenu, -1, MF_BYPOSITION | MF_STRING, item_base + i, line);

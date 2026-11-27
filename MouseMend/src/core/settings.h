@@ -8,6 +8,20 @@
 // Persistence of the user settings.
 // The live debounce state lives in DebounceManager, the remaining preferences
 // live in Preferences. These helpers only translate them to and from the registry.
+//
+// Registry layout, first half (HKCU\Software\MouseMend). Together with the table
+// at the top of context_store.h this is the complete set of value names - a new
+// setting belongs in one of the two tables, and adding a row is part of adding
+// the setting, not an afterthought.
+//
+//   DragDistance      DWORD    px    movement above which a press counts as a drag
+//   HybridHeuristic   DWORD    0/1   hybrid drag detection
+//   IntroShown        DWORD    0/1   first-run balloon already displayed
+//   Language          DWORD    0/1   zh-CN / en
+//   LearningEnabled   DWORD    0/1   opt-in self-learning
+//   LogBlocked        DWORD    0/1   append blocked clicks to a daily file
+//   NotifyBlocked     DWORD    0/1   balloon on every blocked click
+//   ReleaseDelay      DWORD    ms    deferred release used by smart dragging
 
 // Preferences that are not part of the debounce state
 typedef struct

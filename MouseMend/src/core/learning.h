@@ -27,3 +27,11 @@ uint32_t learning_suggest_threshold(const SignalRing *ring, int button,
 
 void learning_advice_from_ring(LearningAdvice *advice, const SignalRing *ring,
 							   const uint32_t current_thresholds[MOUSE_BUTTON_COUNT]);
+
+// How many buttons hold advice the menu will actually show.
+//
+// X1/X2 are sampled like every other button and can hold a suggestion that the
+// menu never renders; adoption deliberately ignores them for the same reason.
+// Announcing "3 suggestions" when only 2 can be acted on would send the user
+// looking for a third that does not exist.
+uint32_t learning_advice_visible_count(const LearningAdvice *advice);
