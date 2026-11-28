@@ -23,7 +23,7 @@
 
 ## Download / 下载
 
-Latest release / 最新版本：**[v2.4.2](https://github.com/DaYao202025/MouseMend/releases/tag/v2.4.2)**
+Latest release / 最新版本：**[v2.5.0](https://github.com/DaYao202025/MouseMend/releases/tag/v2.5.0)**
 
 - `MouseMend-x64.exe` —— 64 位 Windows 用这个 / for 64-bit Windows
 - `MouseMend-x86.exe` —— 仅 32 位 Windows / 32-bit only
