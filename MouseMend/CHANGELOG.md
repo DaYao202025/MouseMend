@@ -1,5 +1,75 @@
 # Changelog / 更新记录
 
+## 2.5.0 — 2026-11-28
+
+> 另外两项属于内部改善，用户看不到，故不单列：`language.c` 的版本说明表加了
+> 「发版必须同步」的注释；状态灯的缝隙改为「视觉上分开、命中归左边块」。
+
+### 新增 / Added
+
+- **状态灯改成单击展开**：以前鼠标滑过哪块就展开哪块。实际用起来"追不上"——块的左边缘
+  是前面所有块的宽度之和，鼠标一靠近，目标就被推着走；暂停时倒计时还会让宽度跟着数字
+  抖，指针下面的块会自己换。现在鼠标滑过只把那一块的字符点亮，**点一下才展开**，再点
+  一下收回总览；悬停提示会写清点下去会发生什么。暂停期间的剩余时间按最长格式预留宽度，
+  整段倒计时里这条色块不会动一个像素。**点别的控件、或把窗口收进托盘，都会自动回到总览**，
+  不用再点回去；只有点进三个文字窗格和测试区不算（那还是"在看同一件事"）。
+  The status strip opens on click instead of on hover. Hovering only brightens the
+  character, so the row never moves under the pointer; the tip says what a click
+  will do, and the paused countdown keeps a reserved width so nothing shifts while
+  it counts. It folds back to the verdict when you click another control or put the
+  window away, so it never stays open by accident.
+- **暂停过滤可以选择时长**：原来是写死的 5 分钟——想立刻试一个设置时嫌久，看一段过场
+  动画时嫌短。现在托盘菜单的「暂停过滤」是一个子菜单：暂停时顶部有「恢复过滤」，下面是
+  5 / 10 / 30 分钟和「自定义…」。自定义范围 **1–720 分钟**（最长 12 小时），走与「设置
+  拦截时长」同一个输入框——空串、小数、带字母、越界值都拒绝。
+  暂停时窗口顶部第一个色块变琥珀色并显示 `已暂停 · 剩余 4:32`，逐秒减少。
+  Filtering pause now takes a duration: 5 / 10 / 30 minutes or a custom value
+  from 1 to 720, instead of a hard-coded five. The verdict block turns amber and
+  counts down while paused.
+- **诊断包补五行运行时状态**：`context_paused` / `pause_left_ms` / `advice_count` /
+  `foreground` / `caps`。`--diagnose` 是启动开关，在引擎起来之前执行，这类信息它结构性地
+  拿不到——所以「配了为什么没生效」以前只能靠猜。
+  The exported bundle now carries the live state that `--diagnose` cannot see.
+- **测试日志可以只看一个按键了**：筛选从「自动 + 左/中/右」变成「全部 + 左/中/右/侧一/侧二」，
+  六个开关排成一行。**选「中」也能看到滚轮**——滚轮就是中键压下去换了个方向，以前选了
+  "中键"却看不见任何滚动，是最别扭的一处。判定引擎没变，中键仍然把三个键分开算，
+  这只是显示层的合并。六个开关没有让窗口变宽：实测英文最宽的一档合计 217 DLU、可用 230。
+  The log can be filtered by any of the five buttons, and "middle" now includes the
+  wheel - it is the same physical control. The row of six fits without widening the
+  window.
+- **拦截记录能看出是哪个程序了**：每行在时间后面多一列程序名
+  （`14:32:01.234  chrome.exe  left  pressed  threshold=50ms`），取不到时写 `-`，
+  五列始终对齐。文件名第一次可能出现中文，所以新建的文件带 UTF-8 BOM，Excel 不乱码。
+  顺手把「历史目录」改叫「拦截记录」、「清空记录」改叫「清空显示」——**它只清窗口，
+  不删磁盘上的文件**，这一点现在按钮和悬停提示都会说明。诊断包的最近事件表也补了
+  同一列，以后发过来的报告能直接看出是在哪个软件里点的。
+  The blocked-clicks log now names the program each click was in, and the exported
+  report gained the same column. "Clear log" became "Clear view", because the files
+  on disk were never deleted and the label promised more than it did.
+- **窗口可以置顶了**：鼠标移到状态灯右边那块空白上会浮出一行「右键试试」，右键就有
+  「窗口置顶」。勾上之后窗口一直压在其他窗口上面，方便一边看日志一边操作别的软件；
+  它是窗口状态，不是设置，退出程序后不会保留。**这块空白平时什么都不画，窗口宽度没有变。**
+  Hover the empty space right of the status strip and it says "Right-click here";
+  right-click gives you "Always on top". Nothing is drawn there otherwise, and the
+  window is not any wider.
+- **底排多了一个「设置」**：设置窗体还在做，点它会在状态栏说明这一点，不会弹框挡住你。
+  The Settings button is a placeholder and says so in the status bar.
+- **右下角的「自检」换成了实时日志**：以前那块文本是诊断包的一份副本，导诊断包就能拿到，
+  摆在窗口里只是占地方。现在这里是**真实时日志**：你在任何一个程序里的点击都会进来，
+  按程序分段（`—— chrome.exe ——`），每行写时间、哪个键、与上一次的间隔、按住多久、
+  以及引擎的判定——**和上面两块表是同一套列**。按住时间由按下与松开两个真实时间戳相减，
+  松开没来就写 `>2000`（下界，不是估计值）。测试区上方那块仍然只记测试区里的点击，
+  两者分工不同。**「刷新」按钮随之取消**（它只刷新那块自检）；「清空记录」会把实时日志
+  一起清空，等于从头开始。
+  The self check pane is now a live log of clicks in every program, grouped by
+  program, with the same five columns as the panes above it. The refresh button is
+  gone with the pane it served.
+- **测试区会给侧键和滚轮画圈了**：以前侧键和滚轮按下去**什么标记都没有**（空白灰圈），
+  滚轮甚至根本不画圈。现在侧一/侧二各有自己的颜色和文字，上下滚动分别显示「上」「下」——
+  方向来自事件本身的 delta，因为上滚和下滚是同一个按键。横向滚轮显示「横」，
+  不给它左右箭头：那会和左右键的标记撞。
+  The test area now marks side buttons and the wheel; a scroll says which way it went.
+
 ## 2.4.2 — 2026-11-27
 
 ### 新增 / Added
@@ -52,8 +122,9 @@
 
 ### 验证 / Verified
 
-四配置 Rebuild（含 `/analyze`）0 error 0 warning；单测 x64 / x86 **3360 / 0**；
-`audit_printf.py` **PROBLEMS: none**；`e2e` / `diagnose` / `stuck_key` 各 0 failure。
+四配置 Rebuild（含 `/analyze`）0 error 0 warning；单测 x64 / x86 **3402 / 0**；
+`audit_printf.py` **PROBLEMS: none**；`e2e` / `diagnose` 各 0 failure；
+`stuck_key` 同日真跑通过（`released latency 1 ms`），发版当时因会话锁定 SKIP，如实记录。
 真机截图确认状态栏贴底、高 22 px、第一格显示 `已拦截：msedge.exe`，且现有布局未被挤动。
 
 ## 2.4.1 — 2026-11-26

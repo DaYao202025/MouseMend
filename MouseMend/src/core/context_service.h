@@ -18,6 +18,15 @@ typedef struct
 	// once. Without it "the thread exists" and "the filter has ever seen a
 	// program" look identical, and the second one is what the health line needs.
 	volatile LONG observed;
+
+	// This executable's own file name, resolved once at start.
+	//
+	// The slot for our own window used to be published with an empty name, which
+	// was invisible until the live log started naming the program every decision
+	// was made for: clicking in our own window showed "unknown program" for the
+	// one program that is never unknown. The verdict fields are unchanged - the
+	// status bar still keys on the "ours" flag, not on the name.
+	wchar_t own_name[CONTEXT_NAME_CHARS];
 } ContextService;
 
 bool context_service_start(ContextService *service, ContextFilter *filter);

@@ -291,8 +291,8 @@ void test_block_log(void)
 	CHECK(!block_log_pop(&queue, &entry));
 
 	// FIFO order
-	CHECK(block_log_push(&queue, MOUSE_BUTTON_LEFT, true, 100, 50));
-	CHECK(block_log_push(&queue, MOUSE_BUTTON_RIGHT, false, 200, 60));
+	CHECK(block_log_push(&queue, MOUSE_BUTTON_LEFT, true, 100, 50, L"chrome.exe"));
+	CHECK(block_log_push(&queue, MOUSE_BUTTON_RIGHT, false, 200, 60, NULL));
 	CHECK(block_log_count(&queue) == 2);
 
 	CHECK(block_log_pop(&queue, &entry));
@@ -301,16 +301,23 @@ void test_block_log(void)
 	CHECK(entry.elapsed_ms == 100);
 	CHECK(entry.threshold_ms == 50);
 
+	// The name is copied into the slot: the caller's buffer is a stack local on
+	// the hook, gone long before the UI thread drains the queue
+	CHECK(wcscmp(entry.process, L"chrome.exe") == 0);
+
 	CHECK(block_log_pop(&queue, &entry));
 	CHECK(entry.button == MOUSE_BUTTON_RIGHT);
 	CHECK(!entry.is_down);
 	CHECK(entry.elapsed_ms == 200);
 
+	// A missing name is stored as an empty string, not as a stale one
+	CHECK(entry.process[0] == L'\0');
+
 	CHECK(!block_log_pop(&queue, &entry));
 
 	// Overflow drops the oldest entry and counts it
 	for (int i = 0; i < BLOCK_LOG_RING_SIZE + 5; i++)
-		CHECK(block_log_push(&queue, MOUSE_BUTTON_MIDDLE, true, (uint64_t)i, 50));
+		CHECK(block_log_push(&queue, MOUSE_BUTTON_MIDDLE, true, (uint64_t)i, 50, NULL));
 
 	CHECK(block_log_count(&queue) == BLOCK_LOG_RING_SIZE);
 	CHECK(block_log_dropped(&queue) == 5);
@@ -319,8 +326,8 @@ void test_block_log(void)
 	CHECK(entry.elapsed_ms == 5); // the first five were dropped
 
 	// Invalid buttons are rejected
-	CHECK(!block_log_push(&queue, (MouseButton)MOUSE_BUTTON_COUNT, true, 0, 50));
-	CHECK(!block_log_push(NULL, MOUSE_BUTTON_LEFT, true, 0, 50));
+	CHECK(!block_log_push(&queue, (MouseButton)MOUSE_BUTTON_COUNT, true, 0, 50, L"a.exe"));
+	CHECK(!block_log_push(NULL, MOUSE_BUTTON_LEFT, true, 0, 50, L"a.exe"));
 	CHECK(!block_log_pop(NULL, &entry));
 
 	// Slugs are stable and language independent
@@ -359,6 +366,7 @@ void test_block_log(void)
 	sample.button = MOUSE_BUTTON_X1;
 	sample.is_down = true;
 	sample.threshold_ms = 55;
+	sample.process[0] = L'\0';
 
 	wchar_t line[256];
 	CHECK(block_log_format_line(&sample, &base, line, ARRAYSIZE(line)));
@@ -367,6 +375,19 @@ void test_block_log(void)
 	CHECK(wcsstr(line, L"pressed") != NULL);
 	CHECK(wcsstr(line, L"threshold=55") != NULL);
 	CHECK(wcsstr(line, L"\r\n") != NULL);
+
+	// The program name has a column of its own, straight after the time. This is
+	// the whole point of the change: "left pressed" alone never said in which
+	// program the click was blocked.
+	StringCchCopyW(sample.process, ARRAYSIZE(sample.process), L"notepad.exe");
+	CHECK(block_log_format_line(&sample, &base, line, ARRAYSIZE(line)));
+	CHECK(wcsstr(line, L".123\tnotepad.exe\tx1\tpressed") != NULL);
+
+	// No name reads as "-" rather than as an empty field, so every line still has
+	// the same five columns and the header describes all of them
+	sample.process[0] = L'\0';
+	CHECK(block_log_format_line(&sample, &base, line, ARRAYSIZE(line)));
+	CHECK(wcsstr(line, L".123\t-\tx1\tpressed") != NULL);
 
 	// A release is labelled as such
 	sample.is_down = false;
@@ -381,9 +402,25 @@ void test_block_log(void)
 	wchar_t tiny[4];
 	CHECK(!block_log_format_day(0, &base, tiny, ARRAYSIZE(tiny)));
 
+	// A name longer than the slot is cut, not allowed to overrun it
+	wchar_t long_name[BLOCK_LOG_PROCESS_CHARS + 12];
+	for (int i = 0; i < (int)ARRAYSIZE(long_name) - 1; i++)
+		long_name[i] = (wchar_t)(L'a' + (i % 26));
+	long_name[ARRAYSIZE(long_name) - 1] = L'\0';
+
+	// Not named "small": rpcndr.h still defines that as char for MIDL compatibility,
+	// and `BlockLogQueue small;` then reads as two types in a row.
+	BlockLogQueue long_name_queue;
+	CHECK(block_log_init(&long_name_queue));
+	CHECK(block_log_push(&long_name_queue, MOUSE_BUTTON_LEFT, true, 0, 50, long_name));
+	CHECK(block_log_pop(&long_name_queue, &entry));
+	CHECK(wcslen(entry.process) == BLOCK_LOG_PROCESS_CHARS - 1);
+	CHECK(wcsncmp(entry.process, long_name, BLOCK_LOG_PROCESS_CHARS - 1) == 0);
+	block_log_cleanup(&long_name_queue);
+
 	block_log_cleanup(&queue);
 	CHECK(block_log_count(&queue) == 0);
-	CHECK(!block_log_push(&queue, MOUSE_BUTTON_LEFT, true, 0, 50));
+	CHECK(!block_log_push(&queue, MOUSE_BUTTON_LEFT, true, 0, 50, NULL));
 }
 
 // Exercise the real file writer in a throwaway directory.
@@ -422,6 +459,7 @@ void test_block_log_files(void)
 	entry.button = MOUSE_BUTTON_LEFT;
 	entry.is_down = true;
 	entry.threshold_ms = 50;
+	StringCchCopyW(entry.process, ARRAYSIZE(entry.process), L"chrome.exe");
 
 	// First write creates both the directory and today's file
 	CHECK(block_log_write(directory, &base, &entry));
@@ -445,6 +483,16 @@ void test_block_log_files(void)
 		CHECK(strstr(content, "pressed") != NULL);
 		CHECK(strstr(content, "threshold=50") != NULL);
 		CHECK(strstr(content, "2026-11-21 10:00:05.000") != NULL);
+
+		// The program is written as a column, and the header names all five
+		CHECK(strstr(content, "chrome.exe") != NULL);
+		CHECK(strstr(content, "# time\tprogram\tbutton\tevent\tthreshold") != NULL);
+
+		// A new file starts with a UTF-8 byte order mark, or Excel would read a
+		// Chinese program name as the ANSI code page and show garbage
+		CHECK((unsigned char)content[0] == 0xEF);
+		CHECK((unsigned char)content[1] == 0xBB);
+		CHECK((unsigned char)content[2] == 0xBF);
 	}
 
 	// The user deletes the folder: the next blocked click must recreate it

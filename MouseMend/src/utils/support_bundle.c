@@ -33,6 +33,28 @@ static void to_utf8(const wchar_t *source, char *buffer, size_t buffer_count)
 		buffer[0] = '\0';
 }
 
+// Cut a UTF-8 string to at most max_bytes without splitting a character
+//
+// The program column has a fixed width, so a long name is truncated. Cutting on
+// a byte boundary would leave half of a Chinese character at the end, and this
+// file is meant to be pasted into an issue.
+static void utf8_truncate(char *text, size_t max_bytes)
+{
+	size_t length = text ? strlen(text) : 0;
+
+	if (length <= max_bytes)
+		return;
+
+	length = max_bytes;
+
+	// Continuation bytes are 10xxxxxx: step back to the start of the character
+	// that straddles the cut
+	while (length > 0 && ((unsigned char)text[length] & 0xC0) == 0x80)
+		length--;
+
+	text[length] = '\0';
+}
+
 // Last component of a path
 static const wchar_t *path_file_name(const wchar_t *path)
 {
@@ -222,7 +244,10 @@ static void append_events(char *buffer, size_t buffer_count, const SupportReport
 		return;
 	}
 
-	append(buffer, buffer_count, "  ago_ms  button   dir      x      y     gap   thr  flags  verdict\n");
+	// The header is built with the same widths as the rows, so a typo in it
+	// cannot make the columns drift apart
+	append(buffer, buffer_count, "%8s  %-24s  %-6s  %-4s  %5s  %5s  %5s  %4s  %3s  %s\n",
+		   "ago_ms", "program", "button", "dir", "x", "y", "gap", "thr", "flg", "verdict");
 
 	for (uint32_t i = 0; i < report->event_count; i++)
 	{
@@ -239,9 +264,25 @@ static void append_events(char *buffer, size_t buffer_count, const SupportReport
 		flags[2] = entry->decision.near_miss ? 'N' : '-';
 		flags[3] = '\0';
 
+		// The program name, as UTF-8 rather than through %S: a narrow printf
+		// converts with the C locale and would turn 微信.exe into question marks.
+		//
+		// The column is padded by bytes, so a name that is not ASCII shifts its own
+		// row a little to the left. Cosmetic, and worth saying rather than fixing
+		// here: this file is read by a person, and full display width handling
+		// would be a table renderer for one column.
+		char program[96];
+		to_utf8(entry->process, program, ARRAYSIZE(program));
+
+		if (!program[0])
+			StringCchCopyA(program, ARRAYSIZE(program), "-");
+
+		utf8_truncate(program, 24);
+
 		append(buffer, buffer_count,
-			   "%8I64u  %-6s  %-4s  %5ld  %5ld  %5I64u  %4u  %s  %s\n",
+			   "%8I64u  %-24s  %-6s  %-4s  %5ld  %5ld  %5I64u  %4u  %s  %s\n",
 			   ago,
+			   program,
 			   block_log_button_slug(entry->button),
 			   entry->is_down ? "down" : "up",
 			   entry->x,
@@ -346,6 +387,25 @@ bool support_bundle_build_text(const SupportReport *report, char *buffer, size_t
 
 	append(buffer, buffer_count, "\nhealth\n-----\n");
 	append(buffer, buffer_count, "hook_active : %s\n", report->hook_active ? "yes" : "NO");
+
+	// Runtime state. The `--diagnose` switch cannot produce any of this: it runs
+	// before the engine starts. If a "it does not work" report is missing one of
+	// these lines, it was not written by the running application.
+	append(buffer, buffer_count, "context_paused : %s\n",
+		   report->context_paused ? "yes" : "no");
+
+	if (report->context_paused)
+		append(buffer, buffer_count, "pause_left_ms : %lu\n",
+			   (unsigned long)report->context_pause_left_ms);
+
+	append(buffer, buffer_count, "advice_count : %lu\n", (unsigned long)report->advice_count);
+	append(buffer, buffer_count, "foreground   : %S\n",
+		   report->foreground[0] ? report->foreground : L"-");
+	append(buffer, buffer_count, "caps         : hook=%u learning=%u context=%u log=%u\n",
+		   (unsigned)report->capabilities[CAP_HOOK],
+		   (unsigned)report->capabilities[CAP_LEARNING],
+		   (unsigned)report->capabilities[CAP_CONTEXT],
+		   (unsigned)report->capabilities[CAP_LOG]);
 	append(buffer, buffer_count, "hook_events : %u\n", (unsigned)report->hook_events);
 	append(buffer, buffer_count, "inject_fail : %u\n", (unsigned)report->injection_failures);
 	append(buffer, buffer_count, "inject_ref  : %u\n", (unsigned)report->injection_refused);

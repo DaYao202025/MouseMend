@@ -71,6 +71,16 @@
 #define IDM_CONTEXT_LIST_BLACK (WM_USER + 3100)
 #define IDM_CONTEXT_LIST_MAX 16
 
+// Pause durations. IDM_PAUSE_CONTEXT became the submenu handle, so the click
+// targets moved here: 92-96 was the first free run above IDM_ONLY_CURRENT (91)
+// and below IDM_THRESHOLD_BASE (1000), and nothing in the smoke scripts
+// hardcodes these.
+#define IDM_PAUSE_RESUME (WM_USER + 92)
+#define IDM_PAUSE_5 (WM_USER + 93)
+#define IDM_PAUSE_10 (WM_USER + 94)
+#define IDM_PAUSE_30 (WM_USER + 95)
+#define IDM_PAUSE_CUSTOM (WM_USER + 96)
+
 // Posted after a menu closes, so the file dialog does not fight the modal
 // TrackPopupMenu loop. A second hop keeps it out of the WM_NULL that follows.
 #define WM_APP_ADD_EXE (WM_APP + 13)

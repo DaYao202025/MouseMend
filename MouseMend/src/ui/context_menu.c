@@ -550,10 +550,46 @@ bool context_menu_create(ContextMenuManager *manager, DebounceManager *debounce,
 
 	InsertMenuW(hAdvanced, -1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
 
-	// One entry, two meanings: pausing something the user cannot see the state of
-	// is how a temporary workaround becomes permanent by accident.
-	InsertMenuW(hAdvanced, -1, MF_BYPOSITION | MF_STRING, IDM_PAUSE_CONTEXT,
-				lang_str(paused ? STR_RESUME_CONTEXT : STR_PAUSE_CONTEXT));
+	// Pause submenu. A fixed five minutes is at once too long (trying something
+	// out right now) and too short (a cutscene or a long drag), so the duration
+	// is picked here instead of being compiled in.
+	//
+	// "Resume" only appears while paused. The old entry carried both meanings,
+	// which meant its label had to be read before the click could be understood;
+	// and pausing something whose state is invisible is how a temporary workaround
+	// becomes permanent by accident.
+	HMENU hPause = CreatePopupMenu();
+	if (hPause)
+	{
+		if (paused)
+		{
+			InsertMenuW(hPause, -1, MF_BYPOSITION | MF_STRING, IDM_PAUSE_RESUME,
+						lang_str(STR_RESUME_CONTEXT));
+			InsertMenuW(hPause, -1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
+		}
+
+		InsertMenuW(hPause, -1, MF_BYPOSITION | MF_STRING, IDM_PAUSE_5,
+					lang_str(STR_PAUSE_5));
+		InsertMenuW(hPause, -1, MF_BYPOSITION | MF_STRING, IDM_PAUSE_10,
+					lang_str(STR_PAUSE_10));
+		InsertMenuW(hPause, -1, MF_BYPOSITION | MF_STRING, IDM_PAUSE_30,
+					lang_str(STR_PAUSE_30));
+		InsertMenuW(hPause, -1, MF_BYPOSITION | MF_STRING, IDM_PAUSE_CUSTOM,
+					lang_str(STR_PAUSE_CUSTOM));
+
+		// Not destroyed here: the parent menu owns it from this point and
+		// context_menu_destroy reaches it through the parent.
+		InsertMenuW(hAdvanced, -1, MF_BYPOSITION | MF_POPUP, (UINT_PTR)hPause,
+					lang_str(STR_PAUSE_CONTEXT));
+	}
+	else
+	{
+		// Out of memory for the submenu. Fall back to one entry so pausing still
+		// works: the duration is the new part, being able to pause is not.
+		InsertMenuW(hAdvanced, -1, MF_BYPOSITION | MF_STRING,
+					paused ? IDM_PAUSE_RESUME : IDM_PAUSE_5,
+					lang_str(paused ? STR_RESUME_CONTEXT : STR_PAUSE_CONTEXT));
+	}
 
 	// Moved down from the first level so the three mode submenus could take
 	// its place; it is still one click away.

@@ -84,6 +84,15 @@ typedef struct
 	// from the notice slot so the window never reaches into application state.
 	wchar_t notice_text[STATUS_NOTICE_CHARS];
 
+	// Context filtering paused by the user, and how long is left.
+	//
+	// The window only reads a snapshot and has no access to the ContextFilter, so
+	// without these two fields the top block would keep saying "protection on"
+	// while filtering is actually off - the one place the user looks for a verdict
+	// would be wrong exactly when something is off.
+	bool context_paused;
+	uint32_t context_pause_left_ms;
+
 	// Log directory, empty when it could not be resolved
 	wchar_t log_directory[APP_SNAPSHOT_LOG_DIR_SIZE];
 

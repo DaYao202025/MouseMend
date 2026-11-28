@@ -34,7 +34,7 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_NOTIFY_ON_TEXT_FMT] = L"Sample. Notifications are on: when a false click is blocked you get a balloon like this one, at most once every %d seconds. Fixes double clicks, wheel jumps and dropped drags.",
 	[STR_NOTIFY_BLOCKED_FMT] = L"%I32u more blocked since the last notice (top button this session: %s)",
 	[STR_LOG_BLOCKS] = L"Save blocked clicks to a file",
-	[STR_OPEN_LOG_FOLDER] = L"Open history folder",
+	[STR_OPEN_LOG_FOLDER] = L"Open blocked clicks folder",
 	[STR_OPEN_SETTINGS] = L"Check-up...",
 	[STR_SETTINGS_TITLE] = L"MouseMend v%s \u2014 Mouse Check-up Repair Tool",
 	[STR_GROUP_STATS] = L"Blocked false clicks",
@@ -49,7 +49,7 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_REFRESH] = L"Refresh",
 	[STR_CLOSE] = L"Close",
 	[STR_HOOK_RECOVERED] = L"Windows briefly paused the protection a moment ago. It is running again - only a few seconds were affected.",
-	[STR_LOG_DIR_UNAVAILABLE] = L"The folder where MouseMend lives is read-only, so the history cannot be saved there. Move MouseMend to another folder (for example D:\\ or your desktop) and try again.",
+	[STR_LOG_DIR_UNAVAILABLE] = L"The folder where MouseMend lives is read-only, so blocked clicks cannot be saved there. Move MouseMend to another folder (for example D:\\ or your desktop) and try again.",
 	[STR_RESTORE_DEFAULTS] = L"Restore Defaults",
 	[STR_CONFIRM_RESTORE] = L"Restore every setting to its default value?",
 	[STR_INTRO_TITLE] = L"MouseMend is running",
@@ -85,7 +85,14 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 
 	// Check-up window
 	[STR_GROUP_LOG] = L"Click log",
-	[STR_AUTO] = L"Auto",
+	[STR_GROUP_LIVE] = L"Live log",
+	[STR_LIVE_SECTION_FMT] = L"—— %s ——",
+	[STR_LIVE_UNKNOWN] = L"unknown",
+	[STR_FILTER_ALL] = L"All",
+	[STR_ALWAYS_ON_TOP] = L"Always on top",
+	[STR_EGG_HINT] = L"Right-click here",
+	[STR_SETTINGS_BUTTON] = L"Settings",
+	[STR_SETTINGS_PENDING] = L"The settings window is not built yet - coming soon.",
 	[STR_LOG_COL_TIME] = L"Time",
 	[STR_LOG_COL_BUTTON] = L"Button",
 	[STR_LOG_COL_GAP] = L"Gap ms",
@@ -103,8 +110,10 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_VERDICT_IGNORE_INJECTED] = L"simulated",
 	[STR_VERDICT_IGNORE_UNMONITORED] = L"unprotected",
 	[STR_VERDICT_IGNORE_WHEEL_ZERO] = L"no scroll",
-	[STR_CLEAR] = L"Clear log",
-	[STR_LOG_DIR_BUTTON] = L"Log folder",
+	[STR_CLEAR] = L"Clear view",
+	[STR_LOG_DIR_BUTTON] = L"Block log",
+	[STR_TIP_CLEAR] = L"Empties this window only. The files in the log folder are kept.",
+	[STR_TIP_LOG_DIR] = L"Blocked clicks only, and only while \"Save blocked clicks to a file\" is on in the tray menu (Advanced).",
 	[STR_STATS_SUMMARY_FMT] = L"%I32u blocked - %I32u clicks - gap %I32u-%I32u avg %I32u",
 	[STR_STATS_CLICKS_FMT] = L"%I32u blocked - %I32u clicks",
 	[STR_GROUP_STATS_NEAR_FMT] = L"Blocked (%I32u near miss)",
@@ -137,11 +146,13 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_ABOUT_WEBSITE_BUTTON] = L"Origin page",
 	[STR_ABOUT_CLOSE_BUTTON] = L"Close",
 
-	[STR_FILTER_HINT] = L"Clear Auto first, then pick a single button on the right",
-	[STR_TIP_FILTER_AUTO] = L"Show every button. The three choices on the right stay disabled until this is cleared.",
+	[STR_FILTER_HINT] = L"Clear All first, then pick one button on the right",
+	[STR_TIP_FILTER_ALL] = L"Show every button. The five choices on the right stay disabled until this is cleared.",
 	[STR_TIP_FILTER_LEFT] = L"Log the left button only.",
-	[STR_TIP_FILTER_MIDDLE] = L"Log the middle button only.",
+	[STR_TIP_FILTER_MIDDLE] = L"Log the middle button and its wheel only.",
 	[STR_TIP_FILTER_RIGHT] = L"Log the right button only.",
+	[STR_TIP_FILTER_X1] = L"Log the first side button only.",
+	[STR_TIP_FILTER_X2] = L"Log the second side button only.",
 
 	[STR_TRAY_BALLOON_TITLE] = L"Sent to the tray",
 	[STR_TRAY_BALLOON_TEXT] = L"MouseMend keeps protecting your mouse in the background. Double-click the tray icon to open this window again.",
@@ -198,8 +209,25 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 
 	[STR_VERSION_NOTES] = L"Versions",
 	[STR_VERSION_NOTES_TITLE] = L"What each release fixed.",
+
+	// 发版时这里必须同步。version.h 改了而这段没改，exe 的「版本说明」里就会少
+	// 一个版本，而单测只校验 version.h 内部自洽，不会发现这个问题。
+	// （2026-11-27 发 2.4.2 时确实漏过，靠读 publish-runbook 才发现。）
 	[STR_VERSION_NOTES_TEXT] =
 		L"Only published versions are listed, newest first.\n"
+		L"\n"
+		L"2.5.0  The check-up window was rebuilt around everyday use. The status row\n"
+		L"       is opened by a click instead of a hover: a block used to move away\n"
+		L"       from the pointer as it approached, and no easing curve made that\n"
+		L"       feel right. Hovering now only brightens the character, and the row\n"
+		L"       folds back when you click elsewhere or put the window away. The log\n"
+		L"       can be filtered by any of the five buttons, and Middle now includes\n"
+		L"       the wheel. The self-check pane became a live log of what happens\n"
+		L"       outside this window, with the program each click was in and how long\n"
+		L"       it was held. Filtering can be paused for 5, 10 or 30 minutes, or any\n"
+		L"       span up to 12 hours. The blocked-clicks file names the program too.\n"
+		L"       Fixed: the verdict block claimed protection was on while filtering\n"
+		L"       was paused.\n"
 		L"\n"
 		L"2.4.2  A status bar at the bottom answers a question nothing else did:\n"
 		L"       whether the program in front is being intercepted or let through.\n"
@@ -289,8 +317,15 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_LEARNING] = L"Self-learning thresholds",
 	[STR_ADOPT_LEARNING] = L"Adopt all learning suggestions",
 	[STR_LEARNING_STATUS_FMT] = L"Learning: L %u / R %u / M %u ms (%u samples)",
-	[STR_PAUSE_CONTEXT] = L"Pause filtering for 5 minutes",
+	// No duration in the label: this is the submenu title now, and the durations
+	// are the entries under it.
+	[STR_PAUSE_CONTEXT] = L"Pause filtering",
 	[STR_RESUME_CONTEXT] = L"Resume filtering (paused)",
+	[STR_PAUSE_5] = L"5 minutes",
+	[STR_PAUSE_10] = L"10 minutes",
+	[STR_PAUSE_30] = L"30 minutes",
+	[STR_PAUSE_CUSTOM] = L"Custom...",
+	[STR_PAUSE_PROMPT_FMT] = L"Pause filtering for %d to %d minutes:",
 	[STR_EXCLUDE_CURRENT] = L"Exclude / include the current program",
 	[STR_CONTEXT_STATUS_FMT] = L"Current program: %s",
 
@@ -344,6 +379,9 @@ static const wchar_t *const STRINGS_EN[STR_COUNT] = {
 	[STR_STATUS_SHORT_BAD] = L"Not protected",
 	[STR_STATUS_STRIP_OK] = L"Mouse protection on",
 	[STR_STATUS_STRIP_BAD] = L"Protection problem",
+	[STR_STATUS_STRIP_PAUSED_FMT] = L"Paused - %d:%02d left",
+	[STR_STRIP_TIP_EXPAND] = L"Click to expand",
+	[STR_STRIP_TIP_COLLAPSE] = L"Click to collapse",
 	[STR_STATUS_SHORT_STRIP] = L"P",
 	[STR_CAP_SHORT_HOOK] = L"H",
 	[STR_CAP_SHORT_LEARNING] = L"L",
@@ -385,7 +423,7 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_NOTIFY_ON_TEXT_FMT] = L"示例。拦截提示已开启：今后拦下误触时会弹一个这样的气泡，最快每 %d 秒一次。功能：修复双击、滚轮回跳、拖拽断触。",
 	[STR_NOTIFY_BLOCKED_FMT] = L"此后又拦下 %I32u 次误触（本会话最多：%s）",
 	[STR_LOG_BLOCKS] = L"把拦截记录保存成文件",
-	[STR_OPEN_LOG_FOLDER] = L"打开历史记录目录",
+	[STR_OPEN_LOG_FOLDER] = L"打开拦截记录文件夹",
 	[STR_OPEN_SETTINGS] = L"鼠标体检…",
 	[STR_SETTINGS_TITLE] = L"MouseMend v%s —— 鼠标体检修复工具",
 	[STR_GROUP_STATS] = L"已拦截的误触",
@@ -400,7 +438,7 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_REFRESH] = L"刷新",
 	[STR_CLOSE] = L"关闭",
 	[STR_HOOK_RECOVERED] = L"刚才系统忙了一下，防护停了不到几秒，现在已经自动恢复。",
-	[STR_LOG_DIR_UNAVAILABLE] = L"MouseMend 所在的文件夹不能写入，历史记录存不下来。请把程序挪到别的文件夹（比如 D 盘或桌面）再试一次。",
+	[STR_LOG_DIR_UNAVAILABLE] = L"MouseMend 所在的文件夹不能写入，拦截记录存不下来。请把程序挪到别的文件夹（比如 D 盘或桌面）再试一次。",
 	[STR_RESTORE_DEFAULTS] = L"恢复默认设置",
 	[STR_CONFIRM_RESTORE] = L"是否将所有设置恢复为默认值？",
 	[STR_INTRO_TITLE] = L"MouseMend 已启动",
@@ -436,7 +474,14 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 
 	// Check-up window
 	[STR_GROUP_LOG] = L"测试日志",
-	[STR_AUTO] = L"自动",
+	[STR_GROUP_LIVE] = L"实时日志",
+	[STR_LIVE_SECTION_FMT] = L"—— %s ——",
+	[STR_LIVE_UNKNOWN] = L"未知程序",
+	[STR_FILTER_ALL] = L"全部",
+	[STR_ALWAYS_ON_TOP] = L"窗口置顶",
+	[STR_EGG_HINT] = L"右键试试",
+	[STR_SETTINGS_BUTTON] = L"设置",
+	[STR_SETTINGS_PENDING] = L"设置窗体完善中，敬请期待！",
 	[STR_LOG_COL_TIME] = L"时间",
 	[STR_LOG_COL_BUTTON] = L"按键",
 	[STR_LOG_COL_GAP] = L"间隔ms",
@@ -454,8 +499,10 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_VERDICT_IGNORE_INJECTED] = L"程序模拟",
 	[STR_VERDICT_IGNORE_UNMONITORED] = L"此键未防护",
 	[STR_VERDICT_IGNORE_WHEEL_ZERO] = L"滚轮无位移",
-	[STR_CLEAR] = L"清空记录",
-	[STR_LOG_DIR_BUTTON] = L"历史目录",
+	[STR_CLEAR] = L"清空显示",
+	[STR_LOG_DIR_BUTTON] = L"拦截记录",
+	[STR_TIP_CLEAR] = L"只清空这个窗口里显示的内容，磁盘上的拦截记录文件不会被删除。",
+	[STR_TIP_LOG_DIR] = L"这里只保存被拦下的点击，并且要先在托盘菜单「高级」里打开「把拦截记录保存成文件」。",
 	[STR_STATS_SUMMARY_FMT] = L"共拦截 %I32u 次 · 点击 %I32u 次 · 间隔 %I32u-%I32u 均 %I32u",
 	[STR_STATS_CLICKS_FMT] = L"共拦截 %I32u 次 · 点击 %I32u 次",
 	[STR_GROUP_STATS_NEAR_FMT] = L"已拦截的误触（临界 %I32u 次）",
@@ -488,11 +535,13 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_ABOUT_WEBSITE_BUTTON] = L"原项目地址",
 	[STR_ABOUT_CLOSE_BUTTON] = L"关闭",
 
-	[STR_FILTER_HINT] = L"先取消勾选「自动」，才能选右边的单个按键",
-	[STR_TIP_FILTER_AUTO] = L"显示所有按键的点击。\n取消勾选后，右边的三个选项才能选。",
+	[STR_FILTER_HINT] = L"先取消勾选「全部」，才能只显示某一个按键",
+	[STR_TIP_FILTER_ALL] = L"显示所有按键的点击。\n取消勾选后，右边的五个选项才能选。",
 	[STR_TIP_FILTER_LEFT] = L"只记录左键的点击。",
-	[STR_TIP_FILTER_MIDDLE] = L"只记录中键（滚轮按下去）的点击。",
+	[STR_TIP_FILTER_MIDDLE] = L"只记录中键的点击和滚轮的滚动。",
 	[STR_TIP_FILTER_RIGHT] = L"只记录右键的点击。",
+	[STR_TIP_FILTER_X1] = L"只记录第一个侧键的点击。",
+	[STR_TIP_FILTER_X2] = L"只记录第二个侧键的点击。",
 
 	[STR_TRAY_BALLOON_TITLE] = L"已收进托盘图标",
 	[STR_TRAY_BALLOON_TEXT] = L"MouseMend 仍在后台保护鼠标。双击托盘图标，可以再打开这个窗口。",
@@ -545,6 +594,14 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_VERSION_NOTES_TITLE] = L"每个版本修了什么。",
 	[STR_VERSION_NOTES_TEXT] =
 		L"只列公开发布过的版本，新的在上面。\n"
+		L"\n"
+		L"2.5.0  体检窗口按实际使用重做了一遍。状态行改成单击展开：以前鼠标一靠近，\n"
+		L"       要展开的那一块就被前面的块推着走，怎么调缓动都追不上；现在滑过只\n"
+		L"       把字符点亮。点别处或者收起窗口，就回到总览。日志可以只看五个按键\n"
+		L"       中的任意一个，选「中」连滚轮一起看。自检窗格换成实时日志：本窗口\n"
+		L"       之外发生的每一次点击、当时的程序、按住了多久，都在这里。过滤可以\n"
+		L"       暂停 5 / 10 / 30 分钟，或自定义（最长 12 小时）。拦截记录每行也带上\n"
+		L"       了程序名。修复：暂停期间第一个色块仍说「鼠标防护中」。\n"
 		L"\n"
 		L"2.4.2  窗口底部加了状态栏，回答一个别处没有答案的问题：当前这个程序正在\n"
 		L"       被拦截，还是被放行。第二格放临时提示，几秒后自己消失（钩子被系统\n"
@@ -609,8 +666,14 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_LEARNING] = L"自学习阈值（需手动采用）",
 	[STR_ADOPT_LEARNING] = L"采用全部学习建议",
 	[STR_LEARNING_STATUS_FMT] = L"学习：左 %u / 右 %u / 中 %u ms（%u 样本）",
-	[STR_PAUSE_CONTEXT] = L"暂停过滤 5 分钟",
+	// 不带时长：这句现在是子菜单标题，时长是它下面的条目。
+	[STR_PAUSE_CONTEXT] = L"暂停过滤",
 	[STR_RESUME_CONTEXT] = L"恢复过滤（已暂停）",
+	[STR_PAUSE_5] = L"5 分钟",
+	[STR_PAUSE_10] = L"10 分钟",
+	[STR_PAUSE_30] = L"30 分钟",
+	[STR_PAUSE_CUSTOM] = L"自定义...",
+	[STR_PAUSE_PROMPT_FMT] = L"暂停过滤 %d 到 %d 分钟：",
 	[STR_EXCLUDE_CURRENT] = L"排除 / 取消排除当前程序",
 	[STR_CONTEXT_STATUS_FMT] = L"当前程序：%s",
 
@@ -663,6 +726,9 @@ static const wchar_t *const STRINGS_ZH_CN[STR_COUNT] = {
 	[STR_STATUS_SHORT_BAD] = L"未防护",
 	[STR_STATUS_STRIP_OK] = L"鼠标防护中",
 	[STR_STATUS_STRIP_BAD] = L"鼠标防护异常",
+	[STR_STATUS_STRIP_PAUSED_FMT] = L"已暂停 · 剩余 %d:%02d",
+	[STR_STRIP_TIP_EXPAND] = L"点击展开",
+	[STR_STRIP_TIP_COLLAPSE] = L"点击收起",
 	[STR_STATUS_SHORT_STRIP] = L"防",
 	[STR_CAP_SHORT_HOOK] = L"钩",
 	[STR_CAP_SHORT_LEARNING] = L"学",
@@ -723,21 +789,37 @@ static const wchar_t *const BUTTON_SHORT_NAMES_ZH_CN[MOUSE_BUTTON_COUNT] = {
 	[MOUSE_BUTTON_HWHEEL] = L"横滚",
 };
 
-// One glyph per button, drawn inside the ring of the test area.
+// One short mark per button, drawn inside the ring of the test area.
 //
-// A single glyph is square, so it centres exactly in a circle. It also says which
+// A single glyph is square, so it centres exactly in a circle; the two character
+// marks (side buttons, wheel direction) are centred by the same DrawTextW call in
+// a box that is wider than the ring, so they stay put too. The mark says which
 // button was pressed without the user having to learn the colour code, which is
 // the only cue left to someone who cannot tell red from green.
+//
+// The vertical wheel has no mark here on purpose: which way the notch went lives
+// in the event (see lang_scroll_mark), not in the button. The horizontal wheel is
+// one rare device whose direction is not worth a fourth arrow, so it gets a fixed
+// "横" - a tilt wheel that says "horizontal" is clearer than 左/右, which a reader
+// would take for the left and right buttons.
 static const wchar_t *const BUTTON_MARKS_EN[MOUSE_BUTTON_COUNT] = {
 	[MOUSE_BUTTON_LEFT] = L"L",
 	[MOUSE_BUTTON_RIGHT] = L"R",
 	[MOUSE_BUTTON_MIDDLE] = L"M",
+	[MOUSE_BUTTON_X1] = L"X1",
+	[MOUSE_BUTTON_X2] = L"X2",
+	[MOUSE_BUTTON_HWHEEL] = L"H",
 };
 
 static const wchar_t *const BUTTON_MARKS_ZH_CN[MOUSE_BUTTON_COUNT] = {
 	[MOUSE_BUTTON_LEFT] = L"左",
 	[MOUSE_BUTTON_RIGHT] = L"右",
 	[MOUSE_BUTTON_MIDDLE] = L"中",
+	// 侧一/侧二 rather than 侧1/侧2: a digit next to a mouse button reads as a
+	// count ("the second click"), a numeral reads as the name of the button.
+	[MOUSE_BUTTON_X1] = L"侧一",
+	[MOUSE_BUTTON_X2] = L"侧二",
+	[MOUSE_BUTTON_HWHEEL] = L"横",
 };
 
 // Table lookup per language, so adding a language is a one-line change here
@@ -873,6 +955,64 @@ const wchar_t *lang_button_mark(MouseButton button)
 		mark = BUTTON_MARKS_EN[button];
 
 	return mark ? mark : L"";
+}
+
+// The label under the six filter switches.
+//
+// A word of its own rather than lang_button_name, because the two disagree in
+// English: the menu says "X1", and "X1" in a row of six filters next to "Left"
+// reads as a code. The Chinese happens to match the menu name, and it keeps the
+// 键 on purpose - the first version dropped it to save width, and the row turned
+// out to have room for it after all (design 2.5.1). Widths in the rc were
+// measured against these exact words, so they cannot be shortened casually.
+static const wchar_t *const FILTER_LABELS_EN[MOUSE_BUTTON_COUNT] = {
+	[MOUSE_BUTTON_LEFT] = L"Left",
+	[MOUSE_BUTTON_RIGHT] = L"Right",
+	[MOUSE_BUTTON_MIDDLE] = L"Middle",
+	[MOUSE_BUTTON_X1] = L"Side 1",
+	[MOUSE_BUTTON_X2] = L"Side 2",
+};
+
+static const wchar_t *const FILTER_LABELS_ZH_CN[MOUSE_BUTTON_COUNT] = {
+	[MOUSE_BUTTON_LEFT] = L"左键",
+	[MOUSE_BUTTON_RIGHT] = L"右键",
+	[MOUSE_BUTTON_MIDDLE] = L"中键",
+	// 侧一/侧二, the same words the test area writes inside its rings: the two
+	// places describe the same buttons and a user reads them a few centimetres
+	// apart, so they must not disagree. No 键 here - the 键 on the three main
+	// buttons is what tells them apart from the words 左/右/中 elsewhere; the
+	// side buttons are unambiguous without it, and it costs 3 DLU each.
+	[MOUSE_BUTTON_X1] = L"侧一",
+	[MOUSE_BUTTON_X2] = L"侧二",
+};
+
+const wchar_t *lang_filter_label(MouseButton button)
+{
+	if (button < 0 || button >= MOUSE_BUTTON_COUNT)
+		return L"";
+
+	Language language = (g_language >= 0 && g_language < LANG_COUNT) ? g_language : LANG_EN;
+	const wchar_t *label = (language == LANG_ZH_CN ? FILTER_LABELS_ZH_CN : FILTER_LABELS_EN)[button];
+
+	return label ? label : L"";
+}
+
+// Which way a wheel notch went, for the ring's centre mark.
+//
+// The sign is Windows' own: positive is away from the user (scroll up). Zero
+// means the event carried no delta, so there is nothing to say.
+static const wchar_t *const SCROLL_MARKS_EN[2] = {L"↑", L"↓"};
+static const wchar_t *const SCROLL_MARKS_ZH_CN[2] = {L"上", L"下"};
+
+const wchar_t *lang_scroll_mark(int32_t delta)
+{
+	if (delta == 0)
+		return L"";
+
+	Language language = (g_language >= 0 && g_language < LANG_COUNT) ? g_language : LANG_EN;
+	const wchar_t *const *marks = (language == LANG_ZH_CN) ? SCROLL_MARKS_ZH_CN : SCROLL_MARKS_EN;
+
+	return marks[delta > 0 ? 0 : 1];
 }
 
 // Get the endonym of a language
@@ -1079,6 +1219,20 @@ const wchar_t *lang_format_log_row(wchar_t *buffer, size_t buffer_count,
 	append_cell(buffer, buffer_count, gap, LOG_COL_GAP);
 	append_cell(buffer, buffer_count, hold, LOG_COL_HOLD);
 	StringCchCatW(buffer, buffer_count, verdict ? verdict : L"");
+
+	return buffer;
+}
+
+// Build the label that introduces one program's rows
+const wchar_t *lang_format_live_section(wchar_t *buffer, size_t buffer_count, const wchar_t *name)
+{
+	if (!buffer || buffer_count == 0)
+		return L"";
+
+	buffer[0] = L'\0';
+
+	StringCchPrintfW(buffer, buffer_count, lang_str(STR_LIVE_SECTION_FMT),
+					 (name && name[0]) ? name : lang_str(STR_LIVE_UNKNOWN));
 
 	return buffer;
 }

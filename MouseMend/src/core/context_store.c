@@ -44,6 +44,11 @@ static void read_multi_sz(HKEY key, LPCWSTR name, ContextPathList *list)
 	DWORD type = 0;
 	DWORD bytes = sizeof(g_raw);
 
+	// Only a complete read counts as a rule list. On ERROR_MORE_DATA the buffer
+	// holds a truncated block, and the walk below would turn the last half of a
+	// path into a rule that matches a program the user never listed - which is
+	// worse than losing the list, because it changes what gets filtered instead of
+	// just showing fewer rules.
 	if (RegQueryValueExW(key, name, NULL, &type, (BYTE *)g_raw, &bytes) != ERROR_SUCCESS)
 		return;
 
@@ -312,7 +317,14 @@ bool context_store_save(const ContextPolicy *policy)
 	bool ok = write_dword(key, L"ContextMode", (DWORD)policy->mode);
 	ok = write_multi_sz(key, L"WhitelistExes", &policy->whitelist) && ok;
 	ok = write_multi_sz(key, L"BlacklistExes", &policy->blacklist) && ok;
-	ok = write_dword(key, L"ContextMigrated", 1) && ok;
+
+	// ContextMigrated is NOT written here. It means "the legacy ExcludedExes list
+	// has been looked at", and only migrate_legacy decides that - every one of its
+	// exit paths writes it. Writing it on every save made the marker mean "we
+	// saved at least once", so an upgrade whose first action happened to be a save
+	// (restore defaults, any menu toggle) burned the marker before the legacy rules
+	// were ever read, and those rules were then lost for good. The symptom would
+	// be "I never touched my list, but it stopped filtering".
 
 	RegCloseKey(key);
 	return ok;

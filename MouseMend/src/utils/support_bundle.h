@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <windows.h>
+#include "../core/app_capabilities.h"
 #include "../core/event_history.h"
 #include "../core/mouse_hook.h"
 
@@ -101,6 +102,18 @@ typedef struct
 	uint32_t handle_count;
 	uint32_t gdi_objects;
 	uint32_t user_objects;
+
+	// Runtime state that only exists while the engine is running.
+	//
+	// `--diagnose` cannot report any of this: it runs as a startup switch, before
+	// the engine starts, so it only ever sees configuration. A bundle exported
+	// from the menu - or written by the crash handler - is the only place these
+	// values exist.
+	bool context_paused;
+	uint32_t context_pause_left_ms;
+	uint32_t advice_count; // suggestions currently adoptable
+	uint8_t capabilities[CAP_COUNT];
+	wchar_t foreground[64]; // foreground program when the bundle was written
 
 	// Recent decisions, newest first
 	TraceEntry events[SUPPORT_EVENT_MAX];

@@ -6,6 +6,7 @@
 #include "../core/app_snapshot.h"
 #include "../core/config.h"
 #include "../core/debouncer.h"
+#include "../core/event_history.h"
 #include "../core/event_trace.h"
 #include "log_format.h"
 #include "ripple_view.h"
@@ -65,6 +66,13 @@ typedef struct
 // Fills the snapshot the window renders
 typedef void (*SettingsSnapshotFn)(AppSnapshot *snapshot, void *user);
 
+// Told to put one line into the status bar for a few seconds
+//
+// The window owns no notice slot: the notice has to survive this dialog being
+// hidden and be visible in the same second cell as the hook recoveries, so it
+// lives in the application and the window only asks.
+typedef void (*SettingsNoticeFn)(void *user, const wchar_t *text, uint32_t milliseconds);
+
 // Called when the window is put away into the tray
 //
 // The window is the main window of the application, so its close button hides
@@ -81,9 +89,27 @@ typedef struct
 	void *snapshot_user;
 	EventTrace *trace;
 
-	// Filter: Auto shows every button, otherwise only filter_button
+	// Always-on ring the hook writes into, and the one the live pane reads.
+	//
+	// Separate from trace on purpose: trace only records inside the test area and
+	// only while this window is open, which is right for a log about the test
+	// area and useless for a log about the programs the user actually uses.
+	EventHistory *history;
+
+	// Revision of the live pane's source when it was last painted
+	uint32_t live_revision;
+
+	// Filter: "All" shows every button, otherwise only filter_button.
+	// The name stays filter_auto because the flag means "no per button filter";
+	// only the label under the check box changed.
 	bool filter_auto;
 	MouseButton filter_button;
+
+	// Last wheel that drew a ring, and when. A high resolution wheel reports a
+	// stream of events for one gesture, so the ring is throttled per wheel; see
+	// trigger_ripple.
+	MouseButton wheel_ripple_button;
+	uint64_t wheel_ripple_tick;
 
 	// Per button press counter; statistics only, the log has no number column
 	uint32_t click_counts[MOUSE_BUTTON_COUNT];
@@ -125,9 +151,38 @@ typedef struct
 	uint8_t strip_state[SETTINGS_STATUS_BLOCKS];
 	wchar_t strip_full[SETTINGS_STATUS_BLOCKS][64];
 
-	// Block under the pointer, or -1. Kept beside the blocks so the animation
-	// tick knows where it is heading without asking the cursor again.
+	// Pointer is inside the unmarked hot zone next to the strip, which is what
+	// makes its hint appear. The zone draws nothing while this is false.
+	bool egg_hover;
+
+	// Block under the pointer, or -1. Only drives the "this one is clickable"
+	// highlight and the hover tip now - it no longer decides any width.
 	int strip_hover;
+
+	// Which block is open, and therefore the only thing that can re-lay the row
+	// out. Changed by a click, never by the pointer moving across the strip.
+	//
+	// The pointer used to open blocks, and it could not be made to feel smooth:
+	// a block's left edge is the sum of the widths before it, so opening whatever
+	// the pointer is over pushes every block after it away - the target keeps
+	// moving as the pointer approaches it. A click is a deliberate act, so the
+	// row is allowed to move once and then stay still.
+	int strip_pinned;
+
+	// Hover tip of the block under the pointer.
+	//
+	// A collapsed block shows one character, so the words have to come from
+	// somewhere; and TTM_UPDATETIPTEXTW keeps the pointer instead of copying the
+	// string, so the buffer has to live as long as the tooltip does.
+	wchar_t strip_tip[192];
+
+	// Pause state of context filtering, mirrored from the snapshot.
+	//
+	// Cached because the caption is built in status_strip_set_caption, which has
+	// no snapshot at hand, and because the countdown only needs a repaint when the
+	// displayed second changes - not on every 400 ms tick.
+	bool strip_paused;
+	uint32_t strip_pause_left_s;
 
 	// Dialog font. The pills are drawn by hand, so they have to select this
 	// explicitly or they would come out in the system font and look foreign.
@@ -135,10 +190,6 @@ typedef struct
 
 	// Last rendered caption of the blocked pane (it carries the near miss count)
 	wchar_t last_caption[SETTINGS_CAPTION_SIZE];
-
-	// When the self check was rebuilt last, so a burst of blocked clicks cannot
-	// rebuild a multi-kilobyte string on every single event
-	uint64_t last_diag_tick;
 
 	RippleView ripple;
 
@@ -164,6 +215,10 @@ typedef struct
 	SettingsHiddenFn on_hidden;
 	void *hidden_user;
 
+	// Told to put a line into the status bar; may be NULL
+	SettingsNoticeFn notice;
+	void *notice_user;
+
 	// Bold font used for the status line
 	HFONT status_font;
 
@@ -173,11 +228,13 @@ typedef struct
 
 // Create the window, or bring the existing one to the front
 // Parameters:
-//   trace - Decision ring the hook writes into; may be NULL (empty log then)
+//   trace   - Decision ring the hook writes into; may be NULL (empty log then)
+//   history - Always-on ring the live pane reads; may be NULL (pane stays empty)
 // Returns:
 //   true when a window is visible afterwards
 bool settings_window_open(SettingsWindow *window, HINSTANCE hInstance, HWND owner,
-						  SettingsSnapshotFn snapshot, void *user, EventTrace *trace);
+						  SettingsSnapshotFn snapshot, void *user, EventTrace *trace,
+						  EventHistory *history);
 
 // Check whether the window currently exists, visible or hidden in the tray
 bool settings_window_is_open(const SettingsWindow *window);
@@ -194,3 +251,7 @@ void settings_window_close(SettingsWindow *window);
 // Receive a notification when the user puts the window into the tray
 void settings_window_set_hidden_handler(SettingsWindow *window,
 										SettingsHiddenFn handler, void *user);
+
+// Let the window put a line into the status bar
+void settings_window_set_notice_handler(SettingsWindow *window,
+										SettingsNoticeFn handler, void *user);

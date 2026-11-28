@@ -119,13 +119,34 @@ BEGIN
 // SS_NOTIFY is not decoration: without it a static returns HTTRANSPARENT to
 // WM_NCHITTEST, so the pointer falls through to the dialog and the control never
 // sees WM_MOUSEMOVE - which would leave every block permanently collapsed.
-CONTROL         "", IDC_STATUS, "Static", SS_OWNERDRAW | SS_NOTIFY, 8, 5, 396, 11
+    // The strip does not need the whole row: five blocks laid out from the left
+    // add up to about 120 DLU in their widest state (paused verdict held open),
+    // and the space to the right of them is empty dialog background. It is cut to
+    // 336 so the always-on-top switch can sit between it and the version button,
+    // which is where the user looks for it - the window that should stay on top
+    // is the window he is reading.
+    CONTROL         "", IDC_STATUS, "Static", SS_OWNERDRAW | SS_NOTIFY, 8, 5, 336, 11
+    // An unmarked hot zone, the same height as the strip: 57 DLU is 100 px at
+    // 96 dpi. Nothing is drawn here until the pointer arrives, and a right click
+    // opens a one item menu - the always-on-top switch lives there now, because a
+    // checkbox in this row was visually louder than the thing it toggles. The
+    // zone is a general spot for that kind of small extra, not a button.
+    CONTROL         "", IDC_EGG_ZONE, "Static", SS_OWNERDRAW | SS_NOTIFY, 352, 5, 57, 11
     PUSHBUTTON      "", IDC_VERSION_NOTES, 420, 5, 48, 11
     GROUPBOX        "", IDC_GROUP_TEST, 7, 21, 237, 272
-    CONTROL         "", IDC_FILTER_AUTO, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 29, 44, 10
-    CONTROL         "", IDC_FILTER_LEFT, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 62, 29, 40, 10
-    CONTROL         "", IDC_FILTER_MIDDLE, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 104, 29, 40, 10
-    CONTROL         "", IDC_FILTER_RIGHT, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 146, 29, 40, 10
+    // Six filters in one row, all on y=29. The widths are measured, not guessed:
+    // each item is its longest caption plus 16 DLU for the glyph and padding. The
+    // widest case per item is not always the same language - "Middle" (22 DLU)
+    // beats "中键" (15), and "Side 1" (18) beats "侧一" (15). Together they are
+    // 220 DLU inside a group that offers 230, so the window does not have to grow:
+    // the plan said it did until the numbers were taken (design 2.5.1).
+    // Anything that changes these six captions has to re-measure first.
+    CONTROL         "", IDC_FILTER_AUTO, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 14, 29, 31, 10
+    CONTROL         "", IDC_FILTER_LEFT, "Button", BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP, 49, 29, 31, 10
+    CONTROL         "", IDC_FILTER_MIDDLE, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 84, 29, 38, 10
+    CONTROL         "", IDC_FILTER_RIGHT, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 126, 29, 32, 10
+    CONTROL         "", IDC_FILTER_X1, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 162, 29, 34, 10
+    CONTROL         "", IDC_FILTER_X2, "Button", BS_AUTORADIOBUTTON | WS_TABSTOP, 200, 29, 34, 10
     LTEXT           "", IDC_FILTER_HINT, 14, 40, 224, 9, SS_LEFT | SS_ENDELLIPSIS
     CONTROL         "", IDC_RIPPLE, "Static", SS_OWNERDRAW, 13, 51, 225, 236
     GROUPBOX        "", IDC_GROUP_STATS, 248, 21, 222, 68
@@ -135,16 +156,29 @@ CONTROL         "", IDC_STATUS, "Static", SS_OWNERDRAW | SS_NOTIFY, 8, 5, 396, 1
     // multiline edit answers WM_GETDLGCODE with DLGC_WANTTAB, so Tab lands in the
     // pane and does nothing - the keyboard user cannot get back out of it.
     CONTROL         "", IDC_BLOCKLOG, "Edit", ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 254, 49, 210, 34
-    GROUPBOX        "", IDC_GROUP_LOG, 248, 94, 222, 117
+    // The test log keeps the top half of the right column: it answers "did my
+    // click get through", and it only needs a few rows to do it. The live log
+    // below it takes the space the self check used to occupy - that pane was a
+    // copy of what the support bundle already exports, while this one answers a
+    // question nothing else in the window could: what happened in the programs
+    // the user was actually working in.
+    GROUPBOX        "", IDC_GROUP_LOG, 248, 94, 222, 72
     PUSHBUTTON      "", IDC_LOG_HELP, 420, 101, 48, 11
     LTEXT           "", IDC_TESTLOG_HDR, 255, 102, 160, 9
-    CONTROL         "", IDC_TESTLOG, "Edit", ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 254, 112, 210, 93
-    GROUPBOX        "", IDC_GROUP_DIAG, 248, 216, 222, 55
-    LTEXT           "", IDC_DIAGHINT, 254, 224, 208, 9
-    CONTROL         "", IDC_DIAG, "Edit", ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 254, 234, 210, 31
-    PUSHBUTTON      "", IDC_REFRESH, 248, 277, 46, 16
-    PUSHBUTTON      "", IDC_CLEAR, 298, 277, 58, 16
-    PUSHBUTTON      "", IDC_OPEN_LOG, 360, 277, 60, 16
+    CONTROL         "", IDC_TESTLOG, "Edit", ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 254, 112, 210, 48
+    GROUPBOX        "", IDC_GROUP_LIVE, 248, 172, 222, 99
+    LTEXT           "", IDC_LIVE_HDR, 255, 180, 208, 9
+    // CONTROL rather than EDITTEXT for the same reason as the panes above: the
+    // macro adds WS_TABSTOP and a read only multiline edit answers WM_GETDLGCODE
+    // with DLGC_WANTTAB, which traps Tab inside the pane.
+    CONTROL         "", IDC_LIVELOG, "Edit", ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 254, 190, 210, 75
+    // Settings leads the row: every other button here is about the log, and the
+    // window has no other way to say "the rest of the configuration lives
+    // somewhere". The window it would open does not exist yet, so for now the
+    // button explains that in the status bar - see the TODO on its handler.
+    PUSHBUTTON      "", IDC_SETTINGS, 248, 277, 40, 16
+    PUSHBUTTON      "", IDC_CLEAR, 292, 277, 58, 16
+    PUSHBUTTON      "", IDC_OPEN_LOG, 354, 277, 60, 16
     DEFPUSHBUTTON   "", IDC_CLOSE, 424, 277, 46, 16
 END
 

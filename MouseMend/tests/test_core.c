@@ -26,6 +26,7 @@
 #include "../src/core/status_notice.h"
 #include "../src/ui/language.h"
 #include "../src/ui/log_format.h"
+#include "../src/ui/context_menu.h"
 #include "../src/utils/support_bundle.h"
 #include "../src/utils/zip_writer.h"
 #include "../src/ui/ripple_view.h"
@@ -392,10 +393,15 @@ static void test_tooltip_text(void)
 		CHECK(wcsstr(tooltip, lang_str(STR_TOOLTIP_PARTIAL)) != NULL);
 
 		// Hook inactive: one explanatory line, no blocked counter that would
-		// contradict "protection is not active"
-		lang_format_tooltip(tooltip, ARRAYSIZE(tooltip), MOUSE_BUTTON_COUNT, MOUSE_BUTTON_COUNT, 5, false);
+		// contradict "protection is not active".
+		//
+		// The sentinel is a long number on purpose. It used to be 5, which broke
+		// the moment the version became 2.5.0: the tooltip carries the version, so
+		// every digit in it was a false positive waiting to happen.
+		lang_format_tooltip(tooltip, ARRAYSIZE(tooltip), MOUSE_BUTTON_COUNT, MOUSE_BUTTON_COUNT,
+							987654321, false);
 		CHECK(wcsstr(tooltip, lang_str(STR_STATUS_UNAVAILABLE)) != NULL);
-		CHECK(wcsstr(tooltip, L"5") == NULL);
+		CHECK(wcsstr(tooltip, L"987654321") == NULL);
 		CHECK(wcsstr(tooltip, lang_str(STR_TOOLTIP_BLOCKED_FMT)) == NULL);
 
 		// A huge counter must not overflow the shell limit
@@ -1039,7 +1045,11 @@ static void test_event_trace(void)
 {
 	printf("event trace ring\n");
 
-	EventTrace trace;
+	// Static: the ring is 128 entries and TraceEntry carries a program name now,
+	// so this is ~25 KB. The tests are one process with plenty of room, but a
+	// stack frame that large is what /analyze warns about, and the warning is
+	// worth keeping at zero.
+	static EventTrace trace;
 	CHECK(event_trace_init(&trace));
 	CHECK(event_trace_count(&trace) == 0);
 
@@ -1154,7 +1164,7 @@ static void test_ripple_view(void)
 	CHECK(!ripple_view_tick(&view, 1000));
 	CHECK(ripple_view_active_count(&view) == 0);
 
-	ripple_view_trigger(&view, MOUSE_BUTTON_LEFT, 10, 20, 1000);
+	ripple_view_trigger(&view, MOUSE_BUTTON_LEFT, 0, 10, 20, 1000);
 	CHECK(ripple_view_active_count(&view) == 1);
 	CHECK(ripple_view_tick(&view, 1010));
 	CHECK(ripple_view_active_count(&view) == 1);
@@ -1167,18 +1177,34 @@ static void test_ripple_view(void)
 
 	// A burst reuses slots instead of overflowing the array
 	for (int i = 0; i < RIPPLE_MAX * 4; i++)
-		ripple_view_trigger(&view, MOUSE_BUTTON_RIGHT, i, i, 2000 + (uint64_t)i);
+		ripple_view_trigger(&view, MOUSE_BUTTON_RIGHT, 0, i, i, 2000 + (uint64_t)i);
 
 	CHECK(ripple_view_active_count(&view) == RIPPLE_MAX);
 
-	// The three main buttons must be visually distinguishable
+	// A wheel ring keeps the notch's delta: the mark it draws is "up" or "down",
+	// and the direction exists nowhere else once the event is gone.
+	ripple_view_reset(&view);
+	ripple_view_trigger(&view, MOUSE_BUTTON_WHEEL, -120, 4, 4, 3000);
+	CHECK(view.ripples[0].active);
+	CHECK(view.ripples[0].data == -120);
+
+	// The three main buttons must be visually distinguishable, and so must the
+	// side buttons - they are easy to mix up otherwise, being next to each other
+	// and rarely used.
 	CHECK(ripple_view_color(MOUSE_BUTTON_LEFT) != ripple_view_color(MOUSE_BUTTON_MIDDLE));
 	CHECK(ripple_view_color(MOUSE_BUTTON_MIDDLE) != ripple_view_color(MOUSE_BUTTON_RIGHT));
 	CHECK(ripple_view_color(MOUSE_BUTTON_LEFT) != ripple_view_color(MOUSE_BUTTON_RIGHT));
+	CHECK(ripple_view_color(MOUSE_BUTTON_X1) != ripple_view_color(MOUSE_BUTTON_X2));
+	CHECK(ripple_view_color(MOUSE_BUTTON_X1) != ripple_view_color(MOUSE_BUTTON_LEFT));
+
+	// The two wheels are one physical control: the middle button's colour, and
+	// the direction is carried by the mark instead.
+	CHECK(ripple_view_color(MOUSE_BUTTON_WHEEL) == ripple_view_color(MOUSE_BUTTON_MIDDLE));
+	CHECK(ripple_view_color(MOUSE_BUTTON_HWHEEL) == ripple_view_color(MOUSE_BUTTON_MIDDLE));
 
 	// Degenerate arguments
 	ripple_view_reset(NULL);
-	ripple_view_trigger(NULL, MOUSE_BUTTON_LEFT, 0, 0, 0);
+	ripple_view_trigger(NULL, MOUSE_BUTTON_LEFT, 0, 0, 0, 0);
 	CHECK(!ripple_view_tick(NULL, 0));
 	CHECK(ripple_view_active_count(NULL) == 0);
 }
@@ -1363,11 +1389,59 @@ static void test_event_history(void)
 	CHECK(event_history_copy(&history, out, ARRAYSIZE(out)) == 0);
 }
 
+// The live pane repaints off the revision, so a revision that does not move has
+// to mean "nothing new" - and a ring that refuses the copy must say so, or the
+// pane would blank itself every time the hook happened to be writing.
+static void test_event_history_revision(void)
+{
+	printf("event history revision\n");
+
+	// Static for the same reason as test_event_trace: two rings on the stack is
+	// 40 KB, and nothing here needs them to be re-entrant.
+	static EventHistory history;
+	CHECK(event_history_init(&history) == true);
+	CHECK(event_history_revision(&history) == 0);
+
+	TraceEntry entry;
+	memset(&entry, 0, sizeof(entry));
+	entry.button = MOUSE_BUTTON_LEFT;
+	wcscpy_s(entry.process, ARRAYSIZE(entry.process), L"notepad.exe");
+	entry.pid = 4321;
+
+	uint32_t before = event_history_revision(&history);
+	event_history_push(&history, &entry);
+	CHECK(event_history_revision(&history) != before);
+
+	TraceEntry out[4];
+	uint32_t count = 0;
+	CHECK(event_history_try_copy(&history, out, ARRAYSIZE(out), &count) == true);
+	CHECK(count == 1);
+
+	// The program and its pid survive the ring: the live pane and the future per
+	// program learning both read them from here
+	CHECK(out[0].pid == 4321);
+	CHECK(wcscmp(out[0].process, L"notepad.exe") == 0);
+
+	uint32_t after_push = event_history_revision(&history);
+	event_history_clear(&history);
+	CHECK(event_history_revision(&history) != after_push);
+	CHECK(event_history_try_copy(&history, out, ARRAYSIZE(out), &count) == true);
+	CHECK(count == 0);
+
+	// A ring that was never initialised cannot be copied from, and says so
+	EventHistory broken;
+	memset(&broken, 0, sizeof(broken));
+	CHECK(event_history_try_copy(&broken, out, ARRAYSIZE(out), &count) == false);
+	CHECK(count == 0);
+
+	event_history_cleanup(&history);
+}
+
 static void test_support_report(void)
 {
 	printf("support report\n");
 
-	SupportReport report;
+	static SupportReport report;
 	support_bundle_prepare(&report, true);
 
 	CHECK(report.crashed == true);
@@ -1412,11 +1486,20 @@ static void test_support_report(void)
 	report.events[1].timestamp = report.now_tick;
 	report.events[1].decision.reason = DEBOUNCE_REASON_PASS;
 
+	// Only the first event carries a name, so the same run also covers the
+	// unnamed row: the report is a table, and a missing value must not shift it
+	wcscpy_s(report.events[0].process, ARRAYSIZE(report.events[0].process), L"chrome.exe");
+
 	CHECK(support_bundle_build_text(&report, text, sizeof(text)) == true);
 	CHECK(strstr(text, "blocked-threshold") != NULL);
 	CHECK(strstr(text, "passed") != NULL);
 	CHECK(strstr(text, "left") != NULL);
 	CHECK(strstr(text, "none recorded") == NULL);
+
+	// Coordinates alone never said which program they were in, which is the first
+	// question anyone reading a report asks
+	CHECK(strstr(text, "program") != NULL);
+	CHECK(strstr(text, "chrome.exe") != NULL);
 
 	// Every verdict needs its own name: a report that cannot tell them apart is
 	// as useless as no report at all
@@ -1428,6 +1511,46 @@ static void test_support_report(void)
 						 debounce_reason_slug((DebounceReason)b)) != 0);
 		}
 	}
+
+	// Runtime state block (v2.5.0 #1).
+	//
+	// This is the one part of the report that `--diagnose` structurally cannot
+	// produce, and until this assertion existed a field could be added to the
+	// struct, filled by the application, and never printed - or printed with a
+	// type that does not match its placeholder - without a single test noticing.
+	// It went unnoticed once already: the fields shipped, the check count did not
+	// move, and the only way to see them was to export a bundle by hand.
+	support_bundle_prepare(&report, false);
+	report.context_paused = false;
+	report.advice_count = 2;
+	StringCchCopyW(report.foreground, ARRAYSIZE(report.foreground), L"chrome.exe");
+	report.capabilities[CAP_HOOK] = (uint8_t)CAP_STATE_OK;
+	report.capabilities[CAP_LEARNING] = (uint8_t)CAP_STATE_DISABLED;
+	report.capabilities[CAP_CONTEXT] = (uint8_t)CAP_STATE_OK;
+	report.capabilities[CAP_LOG] = (uint8_t)CAP_STATE_DISABLED;
+
+	CHECK(support_bundle_build_text(&report, text, sizeof(text)) == true);
+	CHECK(strstr(text, "context_paused : no") != NULL);
+	CHECK(strstr(text, "advice_count : 2") != NULL);
+	CHECK(strstr(text, "foreground   : chrome.exe") != NULL);
+	CHECK(strstr(text, "caps         : hook=1 learning=0 context=1 log=0") != NULL);
+
+	// Not paused: the remaining time must not appear at all. A zero there would
+	// read as "paused with no time left", which is the opposite of the truth.
+	CHECK(strstr(text, "pause_left_ms") == NULL);
+
+	report.context_paused = true;
+	report.context_pause_left_ms = 65000;
+	CHECK(support_bundle_build_text(&report, text, sizeof(text)) == true);
+	CHECK(strstr(text, "context_paused : yes") != NULL);
+	CHECK(strstr(text, "pause_left_ms : 65000") != NULL);
+
+	// An unresolved foreground program has to be visible as "-" rather than as
+	// an empty value that a reader would mistake for a truncated line.
+	report.context_paused = false;
+	report.foreground[0] = L'\0';
+	CHECK(support_bundle_build_text(&report, text, sizeof(text)) == true);
+	CHECK(strstr(text, "foreground   : -") != NULL);
 }
 
 // The log panes and their rendering used to live inside the check-up window and
@@ -1596,6 +1719,128 @@ static void test_log_format(void)
 	language_set(before);
 }
 
+// Count non overlapping occurrences, for the "one label per program" check
+static int count_text(const wchar_t *haystack, const wchar_t *needle)
+{
+	size_t length = wcslen(needle);
+
+	if (length == 0)
+		return 0;
+
+	int count = 0;
+
+	for (const wchar_t *at = haystack; (at = wcsstr(at, needle)) != NULL; at += length)
+		count++;
+
+	return count;
+}
+
+// The live pane is the one view that covers every program, so its shape matters:
+// one label per program instead of the name on every row, newest first, and the
+// verdict of the event it belongs to.
+static void test_log_format_live_pane(void)
+{
+	printf("log format live pane\n");
+
+	AppSnapshot snapshot;
+	memset(&snapshot, 0, sizeof(snapshot));
+	snapshot.now_local.wYear = 2026;
+	snapshot.now_local.wMonth = 11;
+	snapshot.now_local.wDay = 28;
+	snapshot.now_local.wHour = 14;
+	snapshot.now_local.wMinute = 32;
+	snapshot.now_local.wSecond = 1;
+	snapshot.now_tick = 50000;
+
+	TraceEntry entries[4];
+	memset(entries, 0, sizeof(entries));
+
+	// Newest first, the order EventHistory hands them over in: the release of
+	// the newest click, two clicks in chrome, then one in notepad
+	entries[0].button = MOUSE_BUTTON_RIGHT;
+	entries[0].timestamp = 49500;
+	entries[0].is_down = false;
+	entries[0].decision.reason = DEBOUNCE_REASON_PASS;
+	wcscpy_s(entries[0].process, ARRAYSIZE(entries[0].process), L"chrome.exe");
+
+	entries[1].button = MOUSE_BUTTON_RIGHT;
+	entries[1].timestamp = 49000;
+	entries[1].is_down = true;
+	entries[1].decision.reason = DEBOUNCE_REASON_BLOCK_THRESHOLD;
+	entries[1].decision.elapsed_ms = 42;
+	wcscpy_s(entries[1].process, ARRAYSIZE(entries[1].process), L"chrome.exe");
+
+	entries[2].button = MOUSE_BUTTON_LEFT;
+	entries[2].timestamp = 48000;
+	entries[2].is_down = true;
+	entries[2].decision.reason = DEBOUNCE_REASON_PASS;
+	wcscpy_s(entries[2].process, ARRAYSIZE(entries[2].process), L"chrome.exe");
+
+	entries[3].button = MOUSE_BUTTON_LEFT;
+	entries[3].timestamp = 47000;
+	entries[3].is_down = true;
+	entries[3].decision.reason = DEBOUNCE_REASON_PASS;
+	entries[3].decision.first_event = true;
+	wcscpy_s(entries[3].process, ARRAYSIZE(entries[3].process), L"notepad.exe");
+
+	wchar_t text[2048];
+	log_format_live_pane(&snapshot, entries, 4, text, ARRAYSIZE(text));
+
+	// Two labels and three rows: the release is not a row of its own, or every
+	// click would take two lines
+	CHECK(count_text(text, L"\r\n") == 4);
+
+	// One label per program, not one per row: two clicks in one program must not
+	// repeat its name twice
+	CHECK(count_text(text, L"chrome.exe") == 1);
+	CHECK(count_text(text, L"notepad.exe") == 1);
+
+	// The newest program's label comes first, because the pane reads top down
+	const wchar_t *chrome_label = wcsstr(text, L"chrome.exe");
+	const wchar_t *notepad_label = wcsstr(text, L"notepad.exe");
+	CHECK(chrome_label != NULL && notepad_label != NULL);
+	CHECK(chrome_label < notepad_label);
+
+	// Rows carry their own verdict, and the first event of a session has no gap
+	// to show - a dash, not an invented zero
+	CHECK(wcsstr(text, lang_str(STR_VERDICT_BLOCK_FAST)) != NULL);
+	CHECK(wcsstr(text, lang_str(STR_VERDICT_PASS)) != NULL);
+	CHECK(wcsstr(text, lang_str(STR_LOG_GAP_NONE)) != NULL);
+
+	// The hold column is the difference between two recorded timestamps, and the
+	// two clicks without a release report the pairing timeout as a lower bound
+	// instead of a number. That is the whole honesty rule of this column.
+	CHECK(count_text(text, L">2000") == 2);
+
+	// A program that has not been published yet gets the placeholder rather than
+	// an empty label
+	TraceEntry unknown_entry;
+	memset(&unknown_entry, 0, sizeof(unknown_entry));
+	unknown_entry.button = MOUSE_BUTTON_LEFT;
+	unknown_entry.is_down = true;
+
+	log_format_live_pane(&snapshot, &unknown_entry, 1, text, ARRAYSIZE(text));
+	CHECK(wcsstr(text, lang_str(STR_LIVE_UNKNOWN)) != NULL);
+
+	// An empty history renders as an empty string, never as leftover bytes
+	memset(text, 0xAB, sizeof(text));
+	log_format_live_pane(&snapshot, NULL, 3, text, ARRAYSIZE(text));
+	CHECK(text[0] == L'\0');
+	log_format_live_pane(&snapshot, entries, 0, text, ARRAYSIZE(text));
+	CHECK(text[0] == L'\0');
+
+	// All three panes share one header, hold column included
+	wchar_t header[192];
+	lang_format_log_header(header, ARRAYSIZE(header));
+	CHECK(wcsstr(header, lang_str(STR_LOG_COL_TIME)) != NULL);
+	CHECK(wcsstr(header, lang_str(STR_LOG_COL_GAP)) != NULL);
+	CHECK(wcsstr(header, lang_str(STR_LOG_COL_VERDICT)) != NULL);
+	CHECK(wcsstr(header, lang_str(STR_LOG_COL_HOLD)) != NULL);
+
+	// A press and its release are one row: the release must not appear twice
+	CHECK(log_format_verdict(DEBOUNCE_REASON_PASS) != NULL);
+}
+
 // The window is centred in the work area, and a work area smaller than the
 // window must not push the title bar off screen: that is what happens on a small
 // display or at a high scaling factor, and an off-screen title bar cannot be
@@ -1679,9 +1924,10 @@ static void test_checkup_formats(void)
 			CHECK(lang_display_width(lang_button_short_name((MouseButton)button)) <= 8);
 			CHECK(wcschr(lang_button_short_name((MouseButton)button), L' ') == NULL);
 
-			// The mark drawn inside the ring is one glyph at most: anything wider
-			// would not centre in the circle it sits in
-			CHECK(lang_display_width(lang_button_mark((MouseButton)button)) <= 2);
+			// The mark drawn inside the ring is at most two characters. It used to
+			// be one glyph; the side buttons need two (侧一/侧二), and the box the
+			// mark is centred in is wider than the circle, so two still sit right.
+			CHECK(wcslen(lang_button_mark((MouseButton)button)) <= 2);
 		}
 
 		// The three buttons that draw a ring each get a mark, and no two share one
@@ -1690,8 +1936,39 @@ static void test_checkup_formats(void)
 		CHECK(wcscmp(lang_button_mark(MOUSE_BUTTON_LEFT), lang_button_mark(MOUSE_BUTTON_MIDDLE)) != 0);
 		CHECK(wcscmp(lang_button_mark(MOUSE_BUTTON_RIGHT), lang_button_mark(MOUSE_BUTTON_MIDDLE)) != 0);
 
-		// A wheel never draws a ring, so there is nothing to draw for it
+		// A wheel has no fixed mark: its ring says which way the notch went, and
+		// that is taken from the event's delta.
 		CHECK(lang_button_mark(MOUSE_BUTTON_WHEEL)[0] == L'\0');
+		CHECK(lang_scroll_mark(0)[0] == L'\0');
+		CHECK(lang_scroll_mark(120)[0] != L'\0');
+		CHECK(lang_scroll_mark(-120)[0] != L'\0');
+		CHECK(wcscmp(lang_scroll_mark(120), lang_scroll_mark(-120)) != 0);
+
+		// The filter row carries six short labels on one line, in widths taken
+		// from the dialog font. Every one of them has to stay short: eight cells
+		// is already the widest ("Middle"/"Side 1" are six), and a longer word
+		// would push the last switch out of the group box.
+		const MouseButton filtered[] = {MOUSE_BUTTON_LEFT, MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE,
+										MOUSE_BUTTON_X1, MOUSE_BUTTON_X2};
+
+		for (int i = 0; i < (int)(sizeof(filtered) / sizeof(filtered[0])); i++)
+		{
+			const wchar_t *label = lang_filter_label(filtered[i]);
+
+			CHECK(label[0] != L'\0');
+
+			// Eight cells, spaces included: "Middle" and "Side 1" are the widest
+			// at six, so anything longer has outgrown the row.
+			CHECK(lang_display_width(label) <= 8);
+		}
+
+		// The labels name different buttons, so no two may read the same
+		CHECK(wcscmp(lang_filter_label(MOUSE_BUTTON_LEFT), lang_filter_label(MOUSE_BUTTON_RIGHT)) != 0);
+		CHECK(wcscmp(lang_filter_label(MOUSE_BUTTON_LEFT), lang_filter_label(MOUSE_BUTTON_MIDDLE)) != 0);
+		CHECK(wcscmp(lang_filter_label(MOUSE_BUTTON_X1), lang_filter_label(MOUSE_BUTTON_X2)) != 0);
+
+		// The wheels are not part of the row
+		CHECK(lang_filter_label(MOUSE_BUTTON_WHEEL)[0] == L'\0');
 
 		// The verdict starts at the same cell in the header and in every row, no
 		// matter which button name precedes it. Dropping the press counter paid
@@ -1773,6 +2050,7 @@ static void test_checkup_formats(void)
 	}
 
 	test_log_format();
+	test_log_format_live_pane();
 	language_set(saved);
 }
 
@@ -2033,6 +2311,33 @@ static void test_context_filter(void)
 	CHECK(context_filter_should_suppress(&filter.snap, 10000));
 	CHECK(context_filter_is_paused(&filter, 10000 + CONTEXT_PAUSE_MS - 1));
 	CHECK(!context_filter_is_paused(&filter, 10000 + CONTEXT_PAUSE_MS));
+
+	// A duration that would overflow the tick saturates instead of wrapping.
+	// Wrapping would turn the deadline negative, which reads as "not paused":
+	// filtering would silently come back on while the window still counts down.
+	{
+		uint64_t almost_max = 0xFFFFFFFFFFFFFF00ull;
+
+		context_filter_set_pause(&filter, almost_max, 0xFFFFFFFFu);
+		CHECK(context_filter_is_paused(&filter, almost_max));
+		CHECK(context_filter_is_paused(&filter, almost_max + 1));
+	}
+
+	// The program copy is bounded by the slot's own name, not by the caller's
+	// buffer: a caller that passes a wider count must not read past the field.
+	{
+		wchar_t wide[512];
+		int32_t pid = 0;
+
+		context_filter_publish(&filter, 4242, false, false, L"notepad.exe");
+		memset(wide, 0x41, sizeof(wide));
+
+		context_snapshot_copy_program(&filter.snap, wide, ARRAYSIZE(wide), &pid);
+
+		CHECK(wcscmp(wide, L"notepad.exe") == 0);
+		CHECK(pid == 4242);
+		CHECK(wide[64] == 0x4141); // nothing was written past the slot's field
+	}
 
 	// Session-0 processes can never be in front, so a rule about them would be
 	// a no-op that still looks configured. The add path refuses them.
@@ -2340,6 +2645,24 @@ static void test_command_classify(void)
 	CHECK(command_classify(IDM_ADOPT_LEARNING) == COMMAND_GROUP_LEARNING);
 
 	CHECK(command_classify(IDM_PAUSE_CONTEXT) == COMMAND_GROUP_LIST);
+
+	// The five pause targets. They are the whole reason the entry became a
+	// submenu, and a missing case here fails silently: the click would land in
+	// the "unhandled id" counter and the user would see nothing happen at all.
+	CHECK(command_classify(IDM_PAUSE_RESUME) == COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_PAUSE_5) == COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_PAUSE_10) == COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_PAUSE_30) == COMMAND_GROUP_LIST);
+	CHECK(command_classify(IDM_PAUSE_CUSTOM) == COMMAND_GROUP_LIST);
+
+	// They have to stay inside the empty run above the threshold range, and
+	// stay distinct: 92..96 was chosen because 91 was the last occupied id.
+	CHECK(IDM_PAUSE_RESUME > IDM_ONLY_CURRENT);
+	CHECK(IDM_PAUSE_CUSTOM < IDM_THRESHOLD_BASE);
+	CHECK(IDM_PAUSE_RESUME != IDM_PAUSE_5 && IDM_PAUSE_5 != IDM_PAUSE_10 &&
+		  IDM_PAUSE_10 != IDM_PAUSE_30 && IDM_PAUSE_30 != IDM_PAUSE_CUSTOM);
+	CHECK(IDM_PAUSE_CUSTOM - IDM_PAUSE_RESUME == 4);
+
 	CHECK(command_classify(IDM_EXCLUDE_CURRENT) == COMMAND_GROUP_LIST);
 	CHECK(command_classify(IDM_ONLY_CURRENT) == COMMAND_GROUP_LIST);
 	// Two ids with the same meaning, far apart: a split that copies only the
@@ -2498,6 +2821,155 @@ static void test_status_notice(void)
 	CHECK(!status_notice_current(&notice, text, ARRAYSIZE(text)));
 }
 
+// ------------------------------------------------------------ tray menu shape
+
+// Identifier of one menu item, or -1 for a submenu / separator.
+static UINT menu_item_id(HMENU menu, int index)
+{
+	MENUITEMINFOW info;
+	memset(&info, 0, sizeof(info));
+	info.cbSize = sizeof(info);
+	info.fMask = MIIM_ID | MIIM_FTYPE;
+
+	if (!menu || !GetMenuItemInfoW(menu, (UINT)index, TRUE, &info))
+		return 0;
+
+	if (info.fType & MFT_SEPARATOR)
+		return 0;
+
+	return info.wID;
+}
+
+static bool menu_item_is_separator(HMENU menu, int index)
+{
+	MENUITEMINFOW info;
+	memset(&info, 0, sizeof(info));
+	info.cbSize = sizeof(info);
+	info.fMask = MIIM_FTYPE;
+
+	return menu && GetMenuItemInfoW(menu, (UINT)index, TRUE, &info) &&
+		   (info.fType & MFT_SEPARATOR) != 0;
+}
+
+// Find a submenu by its caption. Titles are localized, so the caller passes the
+// same lang_str() the menu was built with instead of a hard coded word.
+static HMENU find_popup_by_title(HMENU menu, const wchar_t *title)
+{
+	int count = menu ? GetMenuItemCount(menu) : 0;
+
+	for (int i = 0; i < count; i++)
+	{
+		MENUITEMINFOW info;
+		wchar_t text[128];
+
+		memset(&info, 0, sizeof(info));
+		memset(text, 0, sizeof(text));
+		info.cbSize = sizeof(info);
+		info.fMask = MIIM_FTYPE | MIIM_SUBMENU | MIIM_STRING;
+
+		if (!GetMenuItemInfoW(menu, (UINT)i, TRUE, &info))
+			continue;
+
+		if (!info.hSubMenu || (info.fType & MFT_SEPARATOR))
+			continue;
+
+		// The item carries its caption through dwTypeData; read it separately so
+		// a long title cannot silently truncate the comparison.
+		info.dwTypeData = text;
+		info.cch = ARRAYSIZE(text);
+
+		if (!GetMenuItemInfoW(menu, (UINT)i, TRUE, &info))
+			continue;
+
+		// The API truncates and terminates, but the analyser cannot see that a
+		// full length caption still ends inside the buffer. One explicit
+		// terminator is cheaper than a suppression pragma.
+		text[ARRAYSIZE(text) - 1] = L'\0';
+
+		if (wcscmp(text, title) == 0)
+			return info.hSubMenu;
+	}
+
+	return NULL;
+}
+
+// The pause entry became a submenu so a duration could be chosen. Its shape is
+// a contract with the user, and it is the one thing in this project that used to
+// be checkable only by opening the menu by hand: the captions are fixed, the
+// entries are inert labels, and "Resume" must not exist while nothing is paused.
+//
+// A menu is not a window: building it needs no message loop, so this runs in the
+// console test suite like every other structural assertion.
+static void test_context_menu_pause(void)
+{
+	printf("context menu pause submenu\n");
+
+	// Static: a policy copy is ~65 KB and the menu builder only reads it.
+	static DebounceManager debounce;
+	static ContextPolicy policy;
+
+	Preferences prefs;
+	LearningAdvice advice;
+	ContextMenuManager manager;
+
+	memset(&prefs, 0, sizeof(prefs));
+	memset(&advice, 0, sizeof(advice));
+	memset(&policy, 0, sizeof(policy));
+	memset(&manager, 0, sizeof(manager));
+
+	CHECK(debounce_init(&debounce));
+
+	// ------------------------------------------------ not paused: four entries
+	CHECK(context_menu_create(&manager, &debounce, &prefs, true, &advice, &policy, false));
+
+	HMENU advanced = find_popup_by_title(manager.menu, lang_str(STR_ADVANCED));
+	CHECK(advanced != NULL);
+
+	HMENU pause_menu = advanced ? find_popup_by_title(advanced, lang_str(STR_PAUSE_CONTEXT)) : NULL;
+	CHECK(pause_menu != NULL);
+
+	if (pause_menu)
+	{
+		CHECK(GetMenuItemCount(pause_menu) == 4);
+		CHECK(menu_item_id(pause_menu, 0) == IDM_PAUSE_5);
+		CHECK(menu_item_id(pause_menu, 1) == IDM_PAUSE_10);
+		CHECK(menu_item_id(pause_menu, 2) == IDM_PAUSE_30);
+		CHECK(menu_item_id(pause_menu, 3) == IDM_PAUSE_CUSTOM);
+
+		// No separator at the top: there is nothing above it to separate.
+		CHECK(!menu_item_is_separator(pause_menu, 0));
+	}
+
+	// --------------------------------------- paused: resume on top, then a rule
+	CHECK(context_menu_create(&manager, &debounce, &prefs, true, &advice, &policy, true));
+
+	advanced = find_popup_by_title(manager.menu, lang_str(STR_ADVANCED));
+	pause_menu = advanced ? find_popup_by_title(advanced, lang_str(STR_PAUSE_CONTEXT)) : NULL;
+	CHECK(pause_menu != NULL);
+
+	if (pause_menu)
+	{
+		CHECK(GetMenuItemCount(pause_menu) == 6);
+		CHECK(menu_item_id(pause_menu, 0) == IDM_PAUSE_RESUME);
+		CHECK(menu_item_is_separator(pause_menu, 1));
+		CHECK(menu_item_id(pause_menu, 2) == IDM_PAUSE_5);
+		CHECK(menu_item_id(pause_menu, 3) == IDM_PAUSE_10);
+		CHECK(menu_item_id(pause_menu, 4) == IDM_PAUSE_30);
+		CHECK(menu_item_id(pause_menu, 5) == IDM_PAUSE_CUSTOM);
+
+		// The old single entry is a submenu caption now. It must never come back
+		// as a clickable child: one entry that pauses or resumes depending on
+		// state is exactly what this change removed.
+		for (int i = 0; i < GetMenuItemCount(pause_menu); i++)
+			CHECK(menu_item_id(pause_menu, i) != IDM_PAUSE_CONTEXT);
+	}
+
+	context_menu_destroy(&manager);
+	CHECK(manager.menu == NULL);
+
+	debounce_cleanup(&debounce);
+}
+
 int main(void)
 {
 	test_menu_id_codec();
@@ -2516,6 +2988,7 @@ int main(void)
 	test_signal_ring();
 	test_learning();
 	test_command_classify();
+	test_context_menu_pause();
 	test_app_capabilities();
 	test_context_filter();
 	test_suppression();
@@ -2534,6 +3007,7 @@ int main(void)
 	test_ripple_view();
 	test_snapshot_fill();
 	test_event_history();
+	test_event_history_revision();
 	test_zip_writer();
 	test_support_report();
 	test_window_layout();

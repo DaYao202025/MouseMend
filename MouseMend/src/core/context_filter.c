@@ -467,7 +467,16 @@ void context_filter_set_pause(ContextFilter *filter, uint64_t now_tick, uint32_t
 	if (!filter)
 		return;
 
-	InterlockedExchange64(&filter->snap.pause_until, (LONG64)(now_tick + duration_ms));
+	// Saturating, not wrapping. An "until" that wrapped into the negative reads as
+	// "not paused" - filtering would silently come back on while the window still
+	// counts down. Clamping at the largest representable tick keeps the worst case
+	// at "paused for a very long time", which the UI can show and the user can end.
+	uint64_t until = now_tick + duration_ms;
+
+	if (until < now_tick)
+		until = 0x7FFFFFFFFFFFFFFFull;
+
+	InterlockedExchange64(&filter->snap.pause_until, (LONG64)until);
 }
 
 bool context_snapshot_is_paused(const ContextSnapshot *snapshot, uint64_t now_tick)
@@ -502,4 +511,49 @@ bool context_filter_should_suppress(const ContextSnapshot *snapshot, uint64_t no
 		return false;
 
 	return InterlockedCompareExchange((volatile LONG *)&snapshot->slots[current].suppressed, 0, 0) != 0;
+}
+
+void context_snapshot_copy_program(const ContextSnapshot *snapshot, wchar_t *name, size_t count,
+								   int32_t *pid)
+{
+	if (name && count > 0)
+		name[0] = L'\0';
+
+	if (pid)
+		*pid = 0;
+
+	if (!snapshot || !name || count == 0)
+		return;
+
+	// NOTE: same rule as above - this runs inside the mouse hook. No lock, no
+	// allocation, no process/window API. Only a copy of the published slot.
+	LONG current = InterlockedCompareExchange((volatile LONG *)&snapshot->current, -1, -1);
+	if (current != 0 && current != 1)
+		return;
+
+	// Character by character, stopping at the terminator: a straight copy of the
+	// whole buffer could run past the end of the published string into whatever
+	// the polling thread is writing next.
+	//
+	// The source bound is clamped here rather than trusted from the caller: the
+	// destination is whatever size the caller has, and a caller with a wider
+	// buffer would otherwise read past the slot's own name into the next field.
+	size_t limit = ARRAYSIZE(snapshot->slots[0].name);
+
+	if (count > limit)
+		count = limit;
+
+	for (size_t i = 0; i + 1 < count; i++)
+	{
+		wchar_t c = snapshot->slots[current].name[i];
+
+		if (c == L'\0')
+			break;
+
+		name[i] = c;
+		name[i + 1] = L'\0';
+	}
+
+	if (pid)
+		*pid = (int32_t)snapshot->slots[current].pid;
 }

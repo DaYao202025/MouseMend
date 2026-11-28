@@ -53,6 +53,16 @@ bool learning_service_start(LearningService *service, SignalRing *ring,
 							LearningThresholdFn threshold_fn, void *user);
 void learning_service_stop(LearningService *service);
 void learning_service_snapshot(LearningService *service, LearningAdvice *out);
+
+// Same copy, but it never waits for the lock.
+//
+// For the crash and hang paths: those run while another thread may be holding
+// this critical section, including a thread that is already dead. A report with
+// "learning: unknown" is a bad report; a report that hangs the dying process is
+// no report at all - the same rule event_history_try_copy follows.
+// Returns false when the lock was busy, and then leaves *out zeroed.
+bool learning_service_try_snapshot(LearningService *service, LearningAdvice *out);
+
 void learning_service_reset(LearningService *service);
 
 // Whether the worker thread is running. Checks "ready" first on purpose:

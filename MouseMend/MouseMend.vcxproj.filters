@@ -72,6 +72,9 @@
     <ClCompile Include="src\core\learning.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\core\status_notice.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="src\core\command_classify.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -112,6 +115,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\log_format.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\status_bar.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\tray_icon.c">
@@ -194,6 +200,9 @@
     <ClInclude Include="src\core\learning.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\core\status_notice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="src\core\command_classify.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -234,6 +243,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\log_format.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ui\status_bar.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="src\ui\tray_icon.h">

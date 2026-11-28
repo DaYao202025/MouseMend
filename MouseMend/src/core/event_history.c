@@ -44,18 +44,24 @@ void event_history_push(EventHistory *history, const TraceEntry *entry)
 		history->head = (history->head + 1) % EVENT_HISTORY_CAPACITY;
 	}
 
+	InterlockedIncrement(&history->revision);
+
 	LeaveCriticalSection(&history->cs);
 }
 
-uint32_t event_history_copy(EventHistory *history, TraceEntry *out, uint32_t capacity)
+bool event_history_try_copy(EventHistory *history, TraceEntry *out, uint32_t capacity,
+							uint32_t *count)
 {
+	if (count)
+		*count = 0;
+
 	if (!history || !history->ready || !out || capacity == 0)
-		return 0;
+		return false;
 
 	// TryEnter, not Enter: a crash report must never wait for a thread that may
 	// have died while holding this lock.
 	if (!TryEnterCriticalSection(&history->cs))
-		return 0;
+		return false;
 
 	uint32_t written = 0;
 
@@ -68,7 +74,27 @@ uint32_t event_history_copy(EventHistory *history, TraceEntry *out, uint32_t cap
 	}
 
 	LeaveCriticalSection(&history->cs);
+
+	if (count)
+		*count = written;
+
+	return true;
+}
+
+uint32_t event_history_copy(EventHistory *history, TraceEntry *out, uint32_t capacity)
+{
+	uint32_t written = 0;
+
+	event_history_try_copy(history, out, capacity, &written);
 	return written;
+}
+
+uint32_t event_history_revision(EventHistory *history)
+{
+	if (!history || !history->ready)
+		return 0;
+
+	return (uint32_t)InterlockedCompareExchange(&history->revision, 0, 0);
 }
 
 void event_history_clear(EventHistory *history)
@@ -79,5 +105,6 @@ void event_history_clear(EventHistory *history)
 	EnterCriticalSection(&history->cs);
 	history->head = 0;
 	history->count = 0;
+	InterlockedIncrement(&history->revision);
 	LeaveCriticalSection(&history->cs);
 }

@@ -91,6 +91,11 @@
     <ClCompile Include="..\src\ui\log_format.c" />
     <ClCompile Include="..\src\ui\ripple_view.c" />
     <ClCompile Include="..\src\ui\window_layout.c" />
+    <!-- The tray menu has no window and needs no message loop: building one and
+         walking it is the only way to assert the pause submenu's shape, which
+         otherwise could only be checked by opening the menu by hand. -->
+    <ClCompile Include="..\src\ui\context_menu.c" />
+    <ClCompile Include="..\src\utils\autostart.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="test_common.h" />

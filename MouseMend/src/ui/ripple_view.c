@@ -5,6 +5,12 @@
 #pragma comment(lib, "gdi32.lib")
 
 // Ring colour of a button
+//
+// Seven colours is more than anyone can name, so the colour is a second cue and
+// the mark is the first: the side buttons get their own hues only so a ring from
+// one of them is not mistaken for a main button at a glance. The two wheels share
+// the middle button's green - it is the same physical control - and are told
+// apart by their up/down mark.
 COLORREF ripple_view_color(MouseButton button)
 {
 	switch (button)
@@ -12,9 +18,15 @@ COLORREF ripple_view_color(MouseButton button)
 	case MOUSE_BUTTON_LEFT:
 		return RGB(0x15, 0x65, 0xC0); // Blue
 	case MOUSE_BUTTON_MIDDLE:
+	case MOUSE_BUTTON_WHEEL:
+	case MOUSE_BUTTON_HWHEEL:
 		return RGB(0x2E, 0x7D, 0x32); // Green
 	case MOUSE_BUTTON_RIGHT:
 		return RGB(0xC6, 0x28, 0x28); // Red
+	case MOUSE_BUTTON_X1:
+		return RGB(0x00, 0x83, 0x8F); // Teal
+	case MOUSE_BUTTON_X2:
+		return RGB(0x6A, 0x1B, 0x9A); // Purple
 	default:
 		return RGB(0x55, 0x55, 0x55);
 	}
@@ -29,8 +41,9 @@ void ripple_view_reset(RippleView *view)
 	memset(view, 0, sizeof(*view));
 }
 
-// Start a ring for a press
-void ripple_view_trigger(RippleView *view, MouseButton button, int x, int y, uint64_t now_tick)
+// Start a ring for a press or a wheel notch
+void ripple_view_trigger(RippleView *view, MouseButton button, int32_t data, int x, int y,
+						 uint64_t now_tick)
 {
 	if (!view)
 		return;
@@ -60,6 +73,7 @@ void ripple_view_trigger(RippleView *view, MouseButton button, int x, int y, uin
 	}
 
 	view->ripples[slot].button = button;
+	view->ripples[slot].data = data;
 	view->ripples[slot].x = x;
 	view->ripples[slot].y = y;
 	view->ripples[slot].start_tick = now_tick;
@@ -222,7 +236,14 @@ static void draw_ripple(HDC dc, HFONT font, const Ripple *ripple, uint64_t now_t
 	if (appear_end > 0 && t < appear_end)
 		appear = t * 100 / appear_end;
 
-	draw_mark(dc, font, ripple->x, ripple->y, lang_button_mark(ripple->button),
+	// A wheel has no mark of its own: the useful thing to say is which way this
+	// notch went, and that lives in the event's delta, not in its button.
+	const wchar_t *mark = lang_button_mark(ripple->button);
+
+	if (!mark[0])
+		mark = lang_scroll_mark(ripple->data);
+
+	draw_mark(dc, font, ripple->x, ripple->y, mark,
 			  fade_to_background(base, 100 - ((100 - fade) * appear) / 100));
 }
 

@@ -145,6 +145,24 @@ void learning_service_snapshot(LearningService *service, LearningAdvice *out)
 	LeaveCriticalSection(&service->cs);
 }
 
+bool learning_service_try_snapshot(LearningService *service, LearningAdvice *out)
+{
+	if (!out)
+		return false;
+
+	memset(out, 0, sizeof(*out));
+
+	if (!service || !service->cs_alive)
+		return true; // nothing to report, which is not a failure
+
+	if (!TryEnterCriticalSection(&service->cs))
+		return false;
+
+	memcpy(out, &service->advice, sizeof(*out));
+	LeaveCriticalSection(&service->cs);
+	return true;
+}
+
 bool learning_service_is_started(const LearningService *service)
 {
 	// "ready" first: it is the flag set last on success and cleared first on

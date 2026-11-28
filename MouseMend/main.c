@@ -343,6 +343,18 @@ static LRESULT CALLBACK OnMouseHookCallback(const MouseEvent *event, void *user_
 	trace_button(event->button, event->is_down, event->is_injected, event->x, event->y,
 				 debounce_reason_slug(decision.reason), blocked);
 
+	// The program the verdict was made for. Read once per event, because two
+	// readers below describe the same click and must not disagree: the history
+	// ring and the block log both carry this name, and two separate reads could
+	// straddle an update of the slot.
+	//
+	// Copied from the published slot, never resolved here: a user32 call on this
+	// stack risks the hook being removed. See the known limitation on
+	// TraceEntry.process.
+	wchar_t program[EVENT_TRACE_PROCESS_CHARS] = {0};
+	int32_t program_pid = 0;
+	context_snapshot_copy_program(&app->context_filter.snap, program, ARRAYSIZE(program), &program_pid);
+
 	// Record the decision for the check-up window. Memory only: the hook has to
 	// return within its budget or Windows silently removes it.
 	{
@@ -352,7 +364,12 @@ static LRESULT CALLBACK OnMouseHookCallback(const MouseEvent *event, void *user_
 		entry.x = event->x;
 		entry.y = event->y;
 		entry.is_down = event->is_down;
+		entry.data = event->data;
 		entry.decision = decision;
+		entry.pid = program_pid;
+
+		StringCchCopyW(entry.process, ARRAYSIZE(entry.process), program);
+
 		event_trace_push(&app->trace, &entry);
 
 		// Always on, unlike the trace above: a crash report has to describe what
@@ -398,7 +415,8 @@ static LRESULT CALLBACK OnMouseHookCallback(const MouseEvent *event, void *user_
 								   ? (event->timestamp - app->log_base_tick)
 								   : 0;
 
-			if (block_log_push(&app->log_queue, event->button, event->is_down, elapsed, threshold))
+			if (block_log_push(&app->log_queue, event->button, event->is_down, elapsed, threshold,
+							   program))
 				app->log_flush_requested = true;
 		}
 
@@ -595,6 +613,41 @@ static void WriteLastCrashNotice(const wchar_t *value)
 	RegCloseKey(key);
 }
 
+// Everything the per-module capability verdict depends on.
+//
+// Shared by the window snapshot and the support bundle on purpose: two copies of
+// this list is how the two reports start disagreeing about which module broke,
+// and the copy that is wrong will be the one nobody is looking at.
+static void FillCapabilityInputs(CapabilityInputs *caps)
+{
+	if (!caps)
+		return;
+
+	memset(caps, 0, sizeof(*caps));
+
+	caps->hook_ready = g_app.hook_ready;
+	caps->hook_installed = g_app.mouse_hook.installed;
+	caps->hook_healthy = hook_watchdog_is_healthy(&g_app.watchdog);
+
+	caps->learning_enabled = g_app.prefs.learning_enabled;
+	caps->learning_started = learning_service_is_started(&g_app.learning);
+
+	uint32_t samples = 0;
+	for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
+		samples += signal_ring_samples(&g_app.signals, i);
+	caps->learning_has_samples = samples > 0;
+
+	caps->context_active =
+		context_filter_get_mode(&g_app.context_filter) != CONTEXT_MODE_ALL;
+	caps->context_started = context_service_is_running(&g_app.context_service);
+	caps->context_paused = context_filter_is_paused(&g_app.context_filter, GetTickCount64());
+	caps->context_observed = g_app.context_service.observed != 0;
+
+	caps->log_enabled = g_app.prefs.log_blocks;
+	caps->log_ready = g_app.log_queue_ready;
+	caps->log_directory_resolved = g_app.log_directory[0] != L'\0';
+}
+
 // Copy the live state into a report.
 //
 // The engine fields are read without their critical section on purpose: this is
@@ -637,6 +690,50 @@ static void CollectSupportReport(SupportReport *report)
 	report->injection_refused = debounce_injection_refusals();
 
 	report->event_count = event_history_copy(&g_app.history, report->events, SUPPORT_EVENT_MAX);
+
+	// Runtime state. Everything above is configuration; this block is what the
+	// engine is actually doing at this moment, which is the part a "it does not
+	// work" report needs and the part `--diagnose` structurally cannot provide.
+	{
+		CapabilityInputs caps;
+		CapabilityState states[CAP_COUNT];
+		LearningAdvice advice;
+		uint64_t now = GetTickCount64();
+		const ContextSnapshot *context = &g_app.context_filter.snap;
+		LONG current = InterlockedCompareExchange(&g_app.context_filter.snap.current, -1, -1);
+
+		FillCapabilityInputs(&caps);
+		app_capabilities_evaluate(&caps, states);
+
+		for (int i = 0; i < CAP_COUNT; i++)
+			report->capabilities[i] = (uint8_t)states[i];
+
+		// A pause that is still counting down explains "it let a click through"
+		// better than any other field in this report.
+		report->context_paused = context_filter_is_paused(&g_app.context_filter, now);
+		report->context_pause_left_ms = 0;
+
+		if (report->context_paused)
+		{
+			LONG64 left = InterlockedCompareExchange64(&g_app.context_filter.snap.pause_until, 0, 0) -
+						  (LONG64)now;
+
+			if (left > 0 && left <= 24ull * 60ull * 60ull * 1000ull)
+				report->context_pause_left_ms = (uint32_t)left;
+		}
+
+		// Try, never wait: this runs from the crash and hang paths too, where the
+		// lock may belong to a thread that is already dead. A missing advice count
+		// is a gap in the report; a report that hangs the dying process is nothing.
+		if (!learning_service_try_snapshot(&g_app.learning, &advice))
+			report->advice_count = 0; // the worker was mid update; report "none"
+		else
+			report->advice_count = learning_advice_visible_count(&advice);
+
+		if (current >= 0 && current <= 1)
+			StringCchCopyW(report->foreground, ARRAYSIZE(report->foreground),
+						   context->slots[current].name);
+	}
 }
 
 // Build one bundle from the menu and tell the user where it landed
@@ -884,7 +981,7 @@ static bool InitializeApp(void)
 static void OpenCheckupWindow(void)
 {
 	if (!settings_window_open(&g_app.settings, g_app.hInstance, g_app.hWnd,
-							  BuildSnapshot, &g_app, &g_app.trace))
+							  BuildSnapshot, &g_app, &g_app.trace, &g_app.history))
 	{
 		// Silence here is what a user would read as "the program is broken".
 #ifndef NDEBUG
@@ -908,6 +1005,18 @@ static void OnCheckupWindowHidden(void *user)
 						   lang_str(STR_TRAY_BALLOON_TEXT), NIIF_INFO);
 }
 
+// Put a line from the check-up window into the status bar
+//
+// The window owns no notice slot: a line it posts has to outlive the dialog being
+// hidden and share the cell with the hook recoveries, so it goes through the
+// application's slot like every other notice.
+static void OnWindowNotice(void *user, const wchar_t *text, uint32_t milliseconds)
+{
+	(void)user;
+
+	status_notice_post(&g_app.notice, text, milliseconds);
+}
+
 // Show what the user should see right after a successful start
 //
 // Called once from wWinMain, between CreateWindowW and the message loop: at that
@@ -918,6 +1027,11 @@ static void ShowStartupWindow(void)
 	// user where the window went, and it has to be in place before the first
 	// close button is ever clicked.
 	settings_window_set_hidden_handler(&g_app.settings, OnCheckupWindowHidden, &g_app);
+
+	// The window has no notice slot of its own: a line it posts has to outlive the
+	// dialog being hidden and share the cell with the hook recoveries, so it is
+	// written into the application's slot.
+	settings_window_set_notice_handler(&g_app.settings, OnWindowNotice, &g_app);
 
 	if (!g_app.open_checkup_on_start)
 		return;
@@ -1498,6 +1612,26 @@ static void BuildSnapshot(AppSnapshot *snapshot, void *user)
 		}
 	}
 
+	// Pause state, so the verdict block can say "paused" instead of claiming the
+	// mouse is protected while filtering is off.
+	{
+		uint64_t now = GetTickCount64();
+		LONG64 until = InterlockedCompareExchange64(&app->context_filter.snap.pause_until, 0, 0);
+
+		snapshot->context_paused = context_filter_is_paused(&app->context_filter, now);
+		snapshot->context_pause_left_ms = 0;
+
+		if (snapshot->context_paused && until > (LONG64)now)
+		{
+			LONG64 left = until - (LONG64)now;
+
+			// A pause is capped at 720 minutes; anything larger is a stale or
+			// uninitialised value and must not become a six-figure countdown.
+			if (left <= 24ll * 60ll * 60ll * 1000ll)
+				snapshot->context_pause_left_ms = (uint32_t)left;
+		}
+	}
+
 	// Status bar message, if one is current. status_notice_current also drops an
 	// expired one, so the 400 ms refresh is what makes the text disappear - no
 	// second timer anywhere.
@@ -1509,30 +1643,11 @@ static void BuildSnapshot(AppSnapshot *snapshot, void *user)
 	// the only place that can answer "which part broke" instead of "protection
 	// is on" while a module sits dead behind it.
 	{
+		// Filled by the same helper the support bundle uses, so the window and the
+		// report can never disagree about which module is broken.
 		CapabilityInputs caps;
-		memset(&caps, 0, sizeof(caps));
 
-		caps.hook_ready = app->hook_ready;
-		caps.hook_installed = app->mouse_hook.installed;
-		caps.hook_healthy = hook_watchdog_is_healthy(&app->watchdog);
-
-		caps.learning_enabled = app->prefs.learning_enabled;
-		caps.learning_started = learning_service_is_started(&app->learning);
-
-		uint32_t samples = 0;
-		for (int i = 0; i < MOUSE_BUTTON_COUNT; i++)
-			samples += signal_ring_samples(&app->signals, i);
-		caps.learning_has_samples = samples > 0;
-
-		caps.context_active =
-			context_filter_get_mode(&app->context_filter) != CONTEXT_MODE_ALL;
-		caps.context_started = context_service_is_running(&app->context_service);
-		caps.context_paused = context_filter_is_paused(&app->context_filter, GetTickCount64());
-		caps.context_observed = app->context_service.observed != 0;
-
-		caps.log_enabled = app->prefs.log_blocks;
-		caps.log_ready = app->log_queue_ready;
-		caps.log_directory_resolved = app->log_directory[0] != L'\0';
+		FillCapabilityInputs(&caps);
 
 		CapabilityState states[CAP_COUNT];
 		app_capabilities_evaluate(&caps, states);
@@ -1959,17 +2074,47 @@ static bool HandleThresholdCommand(AppState *app, UINT menu_id)
 
 static bool HandleListCommand(AppState *app, HWND hWnd, UINT menu_id)
 {
-	if (menu_id == IDM_PAUSE_CONTEXT)
+	// Pause / resume. IDM_PAUSE_CONTEXT is the submenu handle and no longer
+	// arrives as a command; the branch is kept so that route still lifts a pause
+	// instead of doing nothing if anything ever posts the old id.
+	if (menu_id == IDM_PAUSE_CONTEXT || menu_id == IDM_PAUSE_RESUME)
 	{
-		uint64_t now = GetTickCount64();
+		context_filter_set_pause(&app->context_filter, 0, 0);
+		return true;
+	}
 
-		// The same entry pauses and resumes. A temporary pause the user cannot
-		// lift from the place he started it is a trap, not a convenience.
-		if (context_filter_is_paused(&app->context_filter, now))
-			context_filter_set_pause(&app->context_filter, 0, 0);
-		else
-			context_filter_set_pause(&app->context_filter, now, CONTEXT_PAUSE_MS);
+	if (menu_id == IDM_PAUSE_5 || menu_id == IDM_PAUSE_10 ||
+		menu_id == IDM_PAUSE_30 || menu_id == IDM_PAUSE_CUSTOM)
+	{
+		uint32_t minutes = 5;
 
+		if (menu_id == IDM_PAUSE_10)
+			minutes = 10;
+		else if (menu_id == IDM_PAUSE_30)
+			minutes = 30;
+		else if (menu_id == IDM_PAUSE_CUSTOM)
+		{
+			wchar_t input[16];
+			wchar_t prompt[160];
+			int value = 0;
+
+			// Pre-filled, so the common case is one click on OK. The dialog
+			// rejects anything outside the range on its own - parsing the text
+			// here a second time would be a second place to get it wrong.
+			StringCchPrintfW(input, ARRAYSIZE(input), L"%d", CONTEXT_PAUSE_MAX_MINUTES / 24);
+			StringCchPrintfW(prompt, ARRAYSIZE(prompt), lang_str(STR_PAUSE_PROMPT_FMT),
+							 CONTEXT_PAUSE_MIN_MINUTES, CONTEXT_PAUSE_MAX_MINUTES);
+
+			if (!input_box_show(g_app.hInstance, lang_str(STR_PAUSE_CUSTOM), prompt,
+								input, ARRAYSIZE(input), CONTEXT_PAUSE_MIN_MINUTES,
+								CONTEXT_PAUSE_MAX_MINUTES, &value))
+				return true;
+
+			minutes = (uint32_t)value;
+		}
+
+		context_filter_set_pause(&app->context_filter, GetTickCount64(),
+								 minutes * 60u * 1000u);
 		return true;
 	}
 

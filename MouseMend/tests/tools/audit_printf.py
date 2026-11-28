@@ -58,11 +58,18 @@ STR_TYPES = (
     "PCWSTR|PWSTR|PWCHAR|PCHAR"
 )
 
-# Name based hints, only used when no declaration was found
+# Name based hints, only used when no declaration was found.
+#
+# These are matched as substrings, so a hint must not be a fragment of an
+# unrelated word. "_text" and not "text" because "context" contains "text":
+# with the short form every CONTEXT_* macro was classified as a string, and a
+# real numeric argument that happened to be named CONTEXT_something was
+# reported as a type error. Block_log_text and hover_text_chars still match
+# through the leading underscore.
 STRING_HINTS = (
     "lang_str(", "lang_button_name(", "lang_format_", "block_log_button_slug",
     "debounce_reason_slug", "APP_VERSION_STRING", "APP_ORIGIN_URL", "APP_NAME",
-    '"', "path", "directory", "module", "text", "buffer", "line", "label",
+    '"', "path", "directory", "module", "_text", "buffer", "line", "label",
     "name", "message", "verdict", "slug", "caption", "title", "summary",
     "combined", "state_text", "value_text",
 )

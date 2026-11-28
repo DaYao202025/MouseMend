@@ -37,6 +37,11 @@ CommandGroup command_classify(UINT menu_id)
 		return COMMAND_GROUP_LEARNING;
 
 	case IDM_PAUSE_CONTEXT:
+	case IDM_PAUSE_RESUME:
+	case IDM_PAUSE_5:
+	case IDM_PAUSE_10:
+	case IDM_PAUSE_30:
+	case IDM_PAUSE_CUSTOM:
 	case IDM_EXCLUDE_CURRENT:
 	case IDM_ONLY_CURRENT:
 	case IDM_CONTEXT_MODE_ALL_WHITE:

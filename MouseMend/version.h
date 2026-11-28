@@ -3,14 +3,14 @@
 // Version information (single source of truth: included by MouseMend.rc as well)
 
 #define APP_VERSION_MAJOR 2
-#define APP_VERSION_MINOR 4
-#define APP_VERSION_PATCH 2
+#define APP_VERSION_MINOR 5
+#define APP_VERSION_PATCH 0
 
-#define APP_VERSION_STRING "2.4.2"
+#define APP_VERSION_STRING "2.5.0"
 
 // Wide variant, kept in sync by hand because C cannot widen a string literal.
 // tests/test_core.c asserts that both spell the same version.
-#define APP_VERSION_STRING_W L"2.4.2"
+#define APP_VERSION_STRING_W L"2.5.0"
 
 #define APP_NAME "MouseMend"
 #define APP_NAME_W L"MouseMend"

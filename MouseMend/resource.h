@@ -28,6 +28,14 @@
 #define IDC_FILTER_LEFT                 1015
 #define IDC_FILTER_MIDDLE               1016
 #define IDC_FILTER_RIGHT                1017
+#define IDC_FILTER_X1                   1025
+#define IDC_FILTER_X2                   1026
+#define IDC_ALWAYS_ON_TOP               1027
+#define IDC_GROUP_LIVE                  1028
+#define IDC_LIVE_HDR                    1029
+#define IDC_LIVELOG                     1048
+#define IDC_EGG_ZONE                    1049
+#define IDC_SETTINGS                    1050
 #define IDC_GROUP_LOG                   1018
 #define IDC_TESTLOG                     1019
 #define IDC_BLOCKLOG                    1020

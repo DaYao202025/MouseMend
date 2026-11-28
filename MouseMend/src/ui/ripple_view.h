@@ -38,6 +38,7 @@
 typedef struct
 {
 	MouseButton button;
+	int32_t data; // wheel delta of this event, 0 for a press; picks the up/down mark
 	int x;
 	int y;
 	uint64_t start_tick;
@@ -53,8 +54,11 @@ typedef struct
 // Start from a clean slate
 void ripple_view_reset(RippleView *view);
 
-// Start a ring for a press at a client coordinate of the test area
-void ripple_view_trigger(RippleView *view, MouseButton button, int x, int y, uint64_t now_tick);
+// Start a ring for a press - or for a wheel notch - at a client coordinate.
+// data is the event's wheel delta (0 for a press): the mark of a wheel ring says
+// which way the notch went, and that is only knowable from the event.
+void ripple_view_trigger(RippleView *view, MouseButton button, int32_t data, int x, int y,
+						 uint64_t now_tick);
 
 // Age the rings.
 // Returns:

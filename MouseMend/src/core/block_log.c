@@ -38,7 +38,7 @@ void block_log_cleanup(BlockLogQueue *queue)
 
 // Queue one blocked event
 bool block_log_push(BlockLogQueue *queue, MouseButton button, bool is_down,
-					uint64_t elapsed_ms, uint32_t threshold_ms)
+					uint64_t elapsed_ms, uint32_t threshold_ms, const wchar_t *process)
 {
 	if (!queue || !queue->ready)
 		return false;
@@ -61,6 +61,14 @@ bool block_log_push(BlockLogQueue *queue, MouseButton button, bool is_down,
 	slot->button = button;
 	slot->is_down = is_down;
 	slot->threshold_ms = threshold_ms;
+
+	// The name is copied, not stored as a pointer: the caller builds it on the
+	// hook's stack and it is gone long before the UI thread drains this slot.
+	// StringCchCopyNW is plain code, no API call, so it is safe on the hook.
+	slot->process[0] = L'\0';
+
+	if (process && process[0])
+		StringCchCopyNW(slot->process, ARRAYSIZE(slot->process), process, ARRAYSIZE(slot->process) - 1);
 
 	queue->count++;
 
@@ -191,11 +199,16 @@ bool block_log_format_line(const BlockLogEntry *entry, const SYSTEMTIME *base,
 	if (!elapsed_to_systemtime(entry->elapsed_ms, base, &stamp))
 		return false;
 
+	// %s is the wide program name here (this is the wide printf; %S is the narrow
+	// one, which is what the slug and the direction below use). "-" rather than an
+	// empty field keeps the tab count identical on every line, which is what makes
+	// the file readable in Excel and greppable from a script.
 	return SUCCEEDED(StringCchPrintfW(buffer, buffer_count,
-									  L"%04u-%02u-%02u %02u:%02u:%02u.%03u\t%S\t%S\tthreshold=%ums\r\n",
+									  L"%04u-%02u-%02u %02u:%02u:%02u.%03u\t%s\t%S\t%S\tthreshold=%ums\r\n",
 									  (unsigned)stamp.wYear, (unsigned)stamp.wMonth, (unsigned)stamp.wDay,
 									  (unsigned)stamp.wHour, (unsigned)stamp.wMinute, (unsigned)stamp.wSecond,
 									  (unsigned)stamp.wMilliseconds,
+									  entry->process[0] ? entry->process : L"-",
 									  block_log_button_slug(entry->button),
 									  entry->is_down ? "pressed" : "released",
 									  (unsigned)entry->threshold_ms));
@@ -221,6 +234,23 @@ static bool ensure_directory(const wchar_t *path)
 }
 
 // Resolve and create the log directory
+//
+// DEFERRED, written down here so it is not lost - see the design plan, item #6
+// (live log, section 2.6):
+//
+// "Next to the executable, else %LOCALAPPDATA%" is right for a portable copy and
+// wrong for one in Program Files. This program ships no manifest, so a 32 bit
+// build that cannot write next to the exe is redirected by UAC virtualization
+// into %LOCALAPPDATA%\VirtualStore\...: the write succeeds, the file exists, and
+// the folder the user was pointed at stays empty. The 64 bit build never
+// virtualizes (virtualization is a 32 bit feature), which is why testing on the
+// usual build would not show it.
+//
+// When #6 adds an export for the live log, decide the default here: keep
+// "portable first" but detect the redirect (compare where the file really landed
+// with where it was asked to go), or move the default to %LOCALAPPDATA% and make
+// the exe adjacent folder an explicit option. Until then, do not paper over it in
+// the UI: a wrong path is better than a path that silently means something else.
 bool block_log_resolve_directory(wchar_t *buffer, size_t buffer_count)
 {
 	if (!buffer || buffer_count == 0)
@@ -351,7 +381,15 @@ size_t block_log_write_many(const wchar_t *directory, const SYSTEMTIME *base,
 
 			if (new_file)
 			{
-				static const char HEADER[] = "# time\tbutton\tevent\tthreshold\r\n";
+				// The byte order mark is what makes Excel read the file as UTF-8
+				// instead of the ANSI code page. It only became necessary when the
+				// program column was added: a Chinese exe name (微信.exe) is the
+				// first non-ASCII thing this file has ever contained. It sits before
+				// the header line, so a script that skips "# " lines is unaffected.
+				static const char BOM[] = "\xEF\xBB\xBF";
+				fwrite(BOM, 1, sizeof(BOM) - 1, file);
+
+				static const char HEADER[] = "# time\tprogram\tbutton\tevent\tthreshold\r\n";
 				fwrite(HEADER, 1, sizeof(HEADER) - 1, file);
 			}
 
@@ -363,8 +401,10 @@ size_t block_log_write_many(const wchar_t *directory, const SYSTEMTIME *base,
 		if (!block_log_format_line(&entries[i], base, line, ARRAYSIZE(line)))
 			continue;
 
-		// The content is pure ASCII, so a straight UTF-8 conversion keeps the
-		// file readable in Notepad and greppable from a script.
+		// Written as UTF-8 with a byte order mark (added above when the file is
+		// created): the program name may be Chinese, and the BOM is what tells
+		// Notepad and Excel which of the two it is. The columns themselves stay
+		// tab separated ASCII, so a script can still split on tabs.
 		char utf8[512];
 		int bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8) - 1, NULL, NULL);
 

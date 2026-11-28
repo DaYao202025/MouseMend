@@ -19,6 +19,15 @@
 #define BLOCK_LOG_DIR_NAME L"Log"
 #define BLOCK_LOG_BUTTON_SLUG_SIZE 12
 
+// Room for the program name, the same width the live log uses
+// (EVENT_TRACE_PROCESS_CHARS): the two views describe the same clicks, and a
+// name that fits one and is cut in the other would look like a bug.
+//
+// Only the file name is stored, never a path. A path would carry the Windows
+// user name into a file people are expected to send to someone else, and it
+// would not fit the fixed column width either.
+#define BLOCK_LOG_PROCESS_CHARS 32
+
 // One blocked event, stored in a form that needs no time API in the hook callback
 typedef struct
 {
@@ -26,6 +35,12 @@ typedef struct
 	MouseButton button;	  // Which button was blocked
 	bool is_down;		  // true = a press was swallowed, false = a release
 	uint32_t threshold_ms; // Threshold that was active at that moment
+
+	// Which program the click was in, copied from the published context slot at
+	// the moment of the block. Empty when nothing has been published yet (a click
+	// during the first second after start-up); the writer prints "-" then, so the
+	// file keeps the same number of tab separated columns on every line.
+	wchar_t process[BLOCK_LOG_PROCESS_CHARS];
 } BlockLogEntry;
 
 // Ring buffer shared between the hook callback and the UI thread
@@ -44,8 +59,11 @@ bool block_log_init(BlockLogQueue *queue);
 void block_log_cleanup(BlockLogQueue *queue);
 
 // Queue one blocked event (called from the hook callback, memory only)
+// process is the program name the engine judged the click in; it may be NULL or
+// empty, and is copied - the caller's buffer is a stack local that is gone by the
+// time the UI thread drains the queue.
 bool block_log_push(BlockLogQueue *queue, MouseButton button, bool is_down,
-					uint64_t elapsed_ms, uint32_t threshold_ms);
+					uint64_t elapsed_ms, uint32_t threshold_ms, const wchar_t *process);
 
 // Dequeue the oldest event (called from the UI thread)
 bool block_log_pop(BlockLogQueue *queue, BlockLogEntry *entry);

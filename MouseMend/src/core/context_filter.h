@@ -27,6 +27,15 @@
 #define CONTEXT_MENU_PATH_CHARS 64
 #define CONTEXT_PAUSE_MS (5u * 60u * 1000u)
 
+// Bounds for a user-entered pause, in minutes. Twelve hours covers "leave it off
+// for the rest of the working day" without letting a mistyped digit park the
+// filter off for a week - the pause is not persisted, but a week is still a week.
+// Plain int, matching input_box_show's int parameters and the %d in the prompt:
+// using unsigned here made the format and the argument disagree in type even
+// though the values are far inside int range.
+#define CONTEXT_PAUSE_MIN_MINUTES 1
+#define CONTEXT_PAUSE_MAX_MINUTES 720
+
 typedef enum
 {
 	CONTEXT_MODE_ALL = 0,	// every program is filtered (default)
@@ -143,6 +152,21 @@ bool context_filter_is_paused(const ContextFilter *filter, uint64_t now_tick);
 // Hook side. Reads one atomic index and one aligned LONG. Must never lock.
 bool context_filter_should_suppress(const ContextSnapshot *snapshot, uint64_t now_tick);
 bool context_snapshot_is_paused(const ContextSnapshot *snapshot, uint64_t now_tick);
+
+// Hook side: which program the current verdict was made for.
+//
+// Copies the name and pid out of the published slot, with the same rules as
+// context_filter_should_suppress: no lock, no allocation, no process or window
+// API - only a bounded copy of what the polling thread already published. A name
+// that mixes two updates is possible; it is a display detail, not a correctness
+// one, and taking the lock here would put a lock on the hook.
+//
+// Empty name only when nothing has been published yet. A pause is deliberately
+// not treated as "no program": pausing the filter does not change which program
+// the user is clicking in, and a log that dropped the name while paused would
+// silently lump those rows under the previous program's separator.
+void context_snapshot_copy_program(const ContextSnapshot *snapshot, wchar_t *name, size_t count,
+								   int32_t *pid);
 
 // Extract the last component of a path. Shared by the service and the tests.
 void context_file_name_from_path(const wchar_t *path, wchar_t *name, size_t count);

@@ -163,6 +163,148 @@ void log_pane_render(const AppSnapshot *snapshot, const LogPane *pane,
 	}
 }
 
+// The release that closes one press, or NULL.
+//
+// entries are newest first, so a press's release sits at a smaller index than the
+// press itself. The walk stops at the first entry of the same button: if that is
+// another press, this press never got a release (the button was pressed again
+// first), which is exactly the case the test log reports as an expired click.
+static const TraceEntry *find_live_release(const TraceEntry *entries, bool *claimed, uint32_t index)
+{
+	for (uint32_t j = index; j-- > 0;)
+	{
+		if (entries[j].button != entries[index].button)
+			continue;
+
+		if (entries[j].is_down || claimed[j])
+			return NULL;
+
+		claimed[j] = true;
+		return &entries[j];
+	}
+
+	return NULL;
+}
+
+void log_format_live_pane(const AppSnapshot *snapshot, const TraceEntry *entries, uint32_t count,
+						  wchar_t *buffer, size_t buffer_count)
+{
+	if (!buffer || buffer_count == 0)
+		return;
+
+	buffer[0] = L'\0';
+
+	if (!snapshot || !entries)
+		return;
+
+	bool wrote_anything = false;
+	const wchar_t *current_program = NULL;
+
+	// Entries already used as the release of an older press. Static, like the
+	// other buffers here: one window, one UI thread, 96 bytes.
+	static bool claimed[EVENT_HISTORY_CAPACITY];
+
+	if (count > ARRAYSIZE(claimed))
+		count = ARRAYSIZE(claimed);
+
+	memset(claimed, 0, sizeof(claimed));
+
+	for (uint32_t i = 0; i < count; i++)
+	{
+		const TraceEntry *entry = &entries[i];
+
+		// One row per action. A release is never a row of its own: it is the
+		// second half of a press, consumed below. A scroll has no press at all,
+		// so it is an action on its own.
+		if (!entry->is_down && !config_is_wheel_button(entry->button))
+			continue;
+
+		// Newest first, so entries[0] is the most recent row and a group starts
+		// when this row's program differs from the last one written above it. The
+		// label therefore sits above the rows it describes and reads as a
+		// heading, which is why it names the program instead of saying "switched
+		// to": a transition verb would point the wrong way up the list.
+		if (!current_program || wcscmp(entry->process, current_program) != 0)
+		{
+			wchar_t section[SETTINGS_LINE_SIZE];
+
+			lang_format_live_section(section, ARRAYSIZE(section), entry->process);
+
+			if (wrote_anything && FAILED(StringCchCatW(buffer, buffer_count, L"\r\n")))
+				break;
+
+			if (FAILED(StringCchCatW(buffer, buffer_count, section)))
+				break;
+
+			current_program = entry->process;
+			wrote_anything = true;
+		}
+
+		wchar_t time_text[SETTINGS_TIME_SIZE];
+		wchar_t gap_text[SETTINGS_CELL_SIZE];
+		wchar_t hold_text[SETTINGS_CELL_SIZE];
+		wchar_t line[SETTINGS_LINE_SIZE];
+
+		log_format_time(snapshot, entry->timestamp, STR_LOG_TIME_FMT,
+						time_text, ARRAYSIZE(time_text));
+
+		// The first event of a session has nothing to compare against, and the
+		// dash says so instead of inventing a zero.
+		format_cell_number(entry->decision.elapsed_ms, !entry->decision.first_event,
+						   gap_text, ARRAYSIZE(gap_text));
+
+		// The hold time of this click. Nothing here is estimated: it is the
+		// difference between two timestamps the hook actually recorded, the same
+		// subtraction the test log makes - only the pairing happens here instead
+		// of in the window. Three outcomes, and only one of them is a number:
+		//   - a release was found        -> the measured milliseconds;
+		//   - the button is still down   -> a dash, "not known yet";
+		//   - no release and past the    -> ">2000", a lower bound, exactly the
+		//     engine's pairing timeout      wording the test log uses for a lost
+		//                                    release. Never a made up number.
+		if (config_is_wheel_button(entry->button))
+		{
+			StringCchCopyW(hold_text, ARRAYSIZE(hold_text), lang_str(STR_LOG_GAP_NONE));
+		}
+		else
+		{
+			const TraceEntry *release = find_live_release(entries, claimed, i);
+
+			if (release)
+			{
+				uint64_t hold = (release->timestamp >= entry->timestamp)
+									? (release->timestamp - entry->timestamp)
+									: 0;
+
+				format_cell_number(hold, true, hold_text, ARRAYSIZE(hold_text));
+			}
+			else
+			{
+				bool expired = snapshot->now_tick >= entry->timestamp &&
+							   (snapshot->now_tick - entry->timestamp) >= (uint64_t)SETTINGS_CLICK_EXPIRE_MS;
+
+				if (expired)
+					StringCchPrintfW(hold_text, ARRAYSIZE(hold_text), L">%I32u",
+									 (uint32_t)SETTINGS_CLICK_EXPIRE_MS);
+				else
+					StringCchCopyW(hold_text, ARRAYSIZE(hold_text), lang_str(STR_LOG_GAP_NONE));
+			}
+		}
+
+		lang_format_log_row(line, ARRAYSIZE(line), time_text,
+							lang_button_short_name(entry->button), gap_text, hold_text,
+							log_format_verdict(entry->decision.reason));
+
+		if (wrote_anything && FAILED(StringCchCatW(buffer, buffer_count, L"\r\n")))
+			break;
+
+		if (FAILED(StringCchCatW(buffer, buffer_count, line)))
+			break;
+
+		wrote_anything = true;
+	}
+}
+
 void log_format_status(const AppSnapshot *snapshot, wchar_t *buffer, size_t buffer_count)
 {
 	const wchar_t *base = snapshot->hook_active ? lang_str(STR_STATUS_OK) : lang_str(STR_STATUS_BAD);

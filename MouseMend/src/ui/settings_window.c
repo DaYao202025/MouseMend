@@ -5,7 +5,7 @@
 #include "window_layout.h"
 #include "../../resource.h"
 #include "../core/config.h"
-#include "../utils/diagnostics.h"
+#include "../core/context_filter.h"
 #include <strsafe.h>
 #include <shellapi.h>
 #include <commctrl.h>
@@ -46,18 +46,9 @@
 // indistinguishable in a log only a human reads.
 #define SETTINGS_PANE_MS 100
 
-// Posted to itself once the window is on screen, so the self check runs after the
-// first paint instead of in front of it
-#define SETTINGS_MSG_BUILD_REPORT (WM_APP + 3)
-
-#define SETTINGS_DIAG_SIZE 4096
-#define SETTINGS_EVIDENCE_SIZE 1536
-
-
-// Minimum time between two event driven self check rebuilds. A badly bouncing
-// button can block dozens of clicks per second and each rebuild repaints the
-// whole pane, which is pure waste: nobody reads it that fast.
-#define SETTINGS_DIAG_MIN_INTERVAL_MS 500
+// The one item of the hot zone's menu. Local to this file: the menu is built and
+// consumed here, and TrackPopupMenu returns the id instead of posting it.
+#define SETTINGS_EGG_ALWAYS_ON_TOP 1
 
 // Entries moved from the ring into the panes per animation tick. Each one costs
 // a row format and, when the pane is rewritten, a copy of a 16 KB buffer, so the
@@ -86,7 +77,7 @@
 #define SETTINGS_STATUS_CLOSE_MS 0.0f
 
 // Gap between two blocks, and the padding inside a block once it is expanded.
-#define SETTINGS_STATUS_GAP 2
+#define SETTINGS_STATUS_GAP 3
 #define SETTINGS_STATUS_PAD 4
 
 // Extra width reserved past the measured caption, 3 px on each side. Text
@@ -94,12 +85,12 @@
 // this the last character of a long caption gets clipped by a hair.
 #define SETTINGS_STATUS_SLACK 6
 
-static void refresh_diagnostics(HWND hDlg, SettingsWindow *window, bool rebuild_report);
 static void apply_language(HWND hDlg);
-static void update_filter_tooltips(HWND hDlg, SettingsWindow *window);
+static void update_control_tooltips(HWND hDlg, SettingsWindow *window);
 static void refresh_capabilities(HWND hDlg, SettingsWindow *window,
 								 const uint8_t states[CAP_COUNT], bool hook_active);
 static void status_strip_set_caption(SettingsWindow *window, int index);
+static void status_strip_measure(HWND hDlg, SettingsWindow *window);
 static void update_status_bar(HWND hDlg, SettingsWindow *window,
 							  const AppSnapshot *snapshot);
 static void set_anim_rate(HWND hDlg, SettingsWindow *window, bool fast);
@@ -119,11 +110,20 @@ static bool is_false_click(const DebounceDecision *decision)
 }
 
 // Whether the current filter wants this entry
-static bool entry_selected(const SettingsWindow *window, const TraceEntry *entry)
+static bool entry_is_visible(const SettingsWindow *window, const TraceEntry *entry)
 {
-	// The radios only offer the three main buttons, so a wheel entry belongs to
-	// the Auto view only.
-	return window->filter_auto || (entry->button == window->filter_button);
+	if (window->filter_auto)
+		return true;
+
+	// "Middle" also means the wheel: the wheel is the middle button pushed in a
+	// different direction, and someone who filtered for the middle button wants
+	// its scrolling too. The engine still judges the three as independent
+	// buttons - this is a display filter, not a merge.
+	if (window->filter_button == MOUSE_BUTTON_MIDDLE)
+		return entry->button == MOUSE_BUTTON_MIDDLE || entry->button == MOUSE_BUTTON_WHEEL ||
+			   entry->button == MOUSE_BUTTON_HWHEEL;
+
+	return entry->button == window->filter_button;
 }
 
 // Start a ring when the press happened inside the test area
@@ -146,8 +146,24 @@ static void trigger_ripple(HWND hDlg, SettingsWindow *window, const TraceEntry *
 	if (!PtInRect(&bounds, point))
 		return;
 
-	ripple_view_trigger(&window->ripple, entry->button,
-						point.x - bounds.left, point.y - bounds.top, entry->timestamp);
+	// A wheel reports a stream of events for one gesture - a high resolution
+	// wheel sends dozens for a single flick - and one ring per event would look
+	// like a machine gun. While the ring for that wheel is still on screen the
+	// next notch stays quiet. Scrolling the other way is a different button, so
+	// it gets its own ring immediately.
+	if (config_is_wheel_button(entry->button))
+	{
+		if (window->wheel_ripple_button == entry->button &&
+			entry->timestamp - window->wheel_ripple_tick < RIPPLE_LIFETIME_MS)
+			return;
+
+		window->wheel_ripple_button = entry->button;
+		window->wheel_ripple_tick = entry->timestamp;
+	}
+
+	// data carries the wheel delta, which is the only way to tell up from down
+	ripple_view_trigger(&window->ripple, entry->button, entry->data, point.x - bounds.left,
+						point.y - bounds.top, entry->timestamp);
 }
 
 // Tell the trace which part of the screen belongs to the test area
@@ -218,7 +234,7 @@ static void record_gap(SettingsWindow *window, const ClickRow *row)
 
 // Move one finished click into the panes
 // Returns which panes changed.
-static unsigned commit_click(SettingsWindow *window, ClickRow *row, bool *blocked_click)
+static unsigned commit_click(SettingsWindow *window, ClickRow *row)
 {
 	unsigned changed = 0;
 
@@ -229,9 +245,6 @@ static unsigned commit_click(SettingsWindow *window, ClickRow *row, bool *blocke
 	{
 		log_pane_push(&window->block_log, row);
 		changed |= SETTINGS_BLOCK_CHANGED;
-
-		if (blocked_click)
-			*blocked_click = true;
 	}
 
 	row->active = false;
@@ -254,7 +267,6 @@ static unsigned drain_trace(HWND hDlg, SettingsWindow *window)
 
 	TraceEntry entry;
 	AppSnapshot snapshot = {0};
-	bool blocked_click = false;
 
 	// Bounded drain: a backlog (or a button that bounces faster than the timer)
 	// would otherwise rebuild the pane once per entry in a single tick and
@@ -264,11 +276,12 @@ static unsigned drain_trace(HWND hDlg, SettingsWindow *window)
 	while (budget-- > 0 && event_trace_pop(window->trace, &entry))
 	{
 		// The ring is physical feedback, not log content: it appears for every
-		// press inside the test area even when the filter hides that button.
-		if (entry.is_down && !config_is_wheel_button(entry.button))
+		// press inside the test area even when the filter hides that button. A
+		// wheel has no press, so it qualifies by being one discrete notch.
+		if (entry.is_down || config_is_wheel_button(entry.button))
 			trigger_ripple(hDlg, window, &entry);
 
-		if (!entry_selected(window, &entry))
+		if (!entry_is_visible(window, &entry))
 			continue;
 
 		if (snapshot.now_tick == 0 && window->snapshot)
@@ -292,7 +305,7 @@ static unsigned drain_trace(HWND hDlg, SettingsWindow *window)
 			window->click_counts[entry.button]++;
 			record_gap(window, &row);
 			record_near_miss(window, &row);
-			changed |= commit_click(window, &row, &blocked_click);
+			changed |= commit_click(window, &row);
 			continue;
 		}
 
@@ -305,7 +318,7 @@ static unsigned drain_trace(HWND hDlg, SettingsWindow *window)
 			{
 				pending->released = false;
 				pending->expired = true;
-				changed |= commit_click(window, pending, &blocked_click);
+				changed |= commit_click(window, pending);
 			}
 
 			pending->button = entry.button;
@@ -330,7 +343,7 @@ static unsigned drain_trace(HWND hDlg, SettingsWindow *window)
 			pending->hold_ms = (entry.timestamp >= pending->down_tick)
 								   ? (entry.timestamp - pending->down_tick)
 								   : 0;
-			changed |= commit_click(window, pending, &blocked_click);
+			changed |= commit_click(window, pending);
 		}
 	}
 
@@ -349,13 +362,8 @@ static unsigned drain_trace(HWND hDlg, SettingsWindow *window)
 
 		row->released = false;
 		row->expired = true;
-		changed |= commit_click(window, row, &blocked_click);
+		changed |= commit_click(window, row);
 	}
-
-	// A false click updates the evidence block, otherwise the self check would
-	// keep showing the previous one until somebody pressed refresh
-	if (blocked_click)
-		refresh_diagnostics(hDlg, window, false);
 
 	return changed;
 }
@@ -467,7 +475,7 @@ static void refresh_live(HWND hDlg, SettingsWindow *window)
 	{
 		window->applied_language = language;
 		apply_language(hDlg);
-		update_filter_tooltips(hDlg, window);
+		update_control_tooltips(hDlg, window);
 
 		// The chart hint and the pane captions are drawn or formatted elsewhere
 		window->last_stats[0] = L'\0';
@@ -496,6 +504,29 @@ static void refresh_live(HWND hDlg, SettingsWindow *window)
 	// 400 ms path does not repaint a caption that has not changed.
 	update_status_bar(hDlg, window, &snapshot);
 
+	// Pause state drives the verdict block. Placed after refresh_capabilities on
+	// purpose: that call owns strip_state[0], and running this first would let it
+	// overwrite the pause caption with "protection on".
+	{
+		uint32_t left_s = snapshot.context_paused
+							  ? (snapshot.context_pause_left_ms + 999u) / 1000u
+							  : 0u;
+
+		if (snapshot.context_paused != window->strip_paused ||
+			left_s != window->strip_pause_left_s)
+		{
+			window->strip_paused = snapshot.context_paused;
+			window->strip_pause_left_s = left_s;
+
+			status_strip_set_caption(window, 0);
+
+			// The caption gets wider with every extra digit, so the block has to be
+			// measured again or the countdown is clipped at the last character.
+			status_strip_measure(hDlg, window);
+			InvalidateRect(GetDlgItem(hDlg, IDC_STATUS), NULL, FALSE);
+		}
+	}
+
 	// Only touch a control when its text actually changed: repainting identical
 	// strings every tick is pointless work on the thread that also runs the hook.
 	wchar_t stats[SETTINGS_STATS_SIZE];
@@ -522,54 +553,42 @@ static void refresh_live(HWND hDlg, SettingsWindow *window)
 	EnableWindow(GetDlgItem(hDlg, IDC_OPEN_LOG), snapshot.logging && snapshot.log_directory[0] != L'\0');
 }
 
-// Refresh the self check pane: the support report plus the evidence above it
-// The buffers are static because 20 KB of dialog stack is needlessly large and
-// there is only ever one check-up window, on the UI thread.
+// Rewrite the live pane from the always-on history
 //
-// rebuild_report is false when only the evidence changed. Building the report is
-// not cheap - it reads the registry and probes whether a hook can be installed -
-// and the hook shares this thread, so a blocked click must not pay for it.
-static void refresh_diagnostics(HWND hDlg, SettingsWindow *window, bool rebuild_report)
+// The history is the only record that covers every program rather than just the
+// test area, and the hook already writes it for the crash report. The pane is a
+// reader of that ring, not a second recorder.
+//
+// The paint is skipped unless the history actually changed. That is the rule the
+// self check used to break: re-setting identical text ten times a second makes an
+// EDIT control flicker, and this pane is redrawn far more often than that.
+static void render_live_log(HWND hDlg, SettingsWindow *window)
 {
-	static wchar_t report[SETTINGS_DIAG_SIZE];
-	static wchar_t evidence[SETTINGS_EVIDENCE_SIZE];
-	static wchar_t combined[SETTINGS_DIAG_SIZE + SETTINGS_EVIDENCE_SIZE + 8];
-	static wchar_t formatted[(SETTINGS_DIAG_SIZE + SETTINGS_EVIDENCE_SIZE + 8) * 2];
-
-	// A button that bounces badly produces dozens of blocked clicks per second,
-	// and every one of them used to rebuild and repaint five kilobytes of text.
-	// That is a lot of work for a pane the user cannot read that fast anyway, so
-	// refreshes triggered by an event are throttled. An explicit refresh (the
-	// button, or opening the window) always wins.
-	uint64_t now = GetTickCount64();
-
-	if (!rebuild_report && window && window->last_diag_tick != 0 &&
-		now >= window->last_diag_tick &&
-		(now - window->last_diag_tick) < SETTINGS_DIAG_MIN_INTERVAL_MS)
+	if (!window || !window->history)
 		return;
 
-	if (window)
-		window->last_diag_tick = now;
+	if (event_history_revision(window->history) == window->live_revision)
+		return;
 
-	if (rebuild_report || report[0] == L'\0')
-	{
-		if (!diagnostics_build(report, ARRAYSIZE(report)))
-			StringCchCopyW(report, ARRAYSIZE(report), L"result=ATTENTION\n");
-	}
+	static TraceEntry entries[EVENT_HISTORY_CAPACITY];
+	static wchar_t text[SETTINGS_LOG_CHARS];
+
+	uint32_t count = 0;
+
+	// A busy ring means the hook is pushing right now: leave the pane alone and
+	// take it on the next tick. Blurring this with "empty" would blank the pane
+	// every time a click arrived at the wrong moment.
+	if (!event_history_try_copy(window->history, entries, EVENT_HISTORY_CAPACITY, &count))
+		return;
+
+	window->live_revision = event_history_revision(window->history);
 
 	AppSnapshot snapshot = {0};
-	if (window && window->snapshot)
+	if (window->snapshot)
 		window->snapshot(&snapshot, window->snapshot_user);
 
-	log_format_evidence(&snapshot, evidence, ARRAYSIZE(evidence));
-
-	StringCchCopyW(combined, ARRAYSIZE(combined), report);
-	StringCchCatW(combined, ARRAYSIZE(combined), L"\n");
-	StringCchCatW(combined, ARRAYSIZE(combined), evidence);
-
-	log_format_lf_to_crlf(combined, formatted, ARRAYSIZE(formatted));
-
-	SetDlgItemTextW(hDlg, IDC_DIAG, formatted);
+	log_format_live_pane(&snapshot, entries, count, text, ARRAYSIZE(text));
+	show_log(hDlg, IDC_LIVELOG, text);
 }
 
 // Empty both logs
@@ -606,29 +625,69 @@ static void clear_logs(HWND hDlg, SettingsWindow *window)
 	if (window->trace)
 		event_trace_clear(window->trace);
 
+	// The live pane's source goes too: the button means "start over", and a pane
+	// that kept its rows would read as a click that did nothing. The cost is that
+	// a crash in the next minutes reports an empty history - the user's own
+	// choice at the moment he pressed it.
+	if (window->history)
+		event_history_clear(window->history);
+
+	window->live_revision = 0xFFFFFFFFu;
+	show_log(hDlg, IDC_LIVELOG, L"");
+
 	refresh_live(hDlg, window);
 }
 
+// The five single button filters, in the order they sit in the dialog.
+//
+// One table for all three jobs: the captions, the enabled/checked state, and the
+// click handler. Five copies of the same list would drift apart, and the copy
+// nobody looks at is the one that drifts.
+static const struct
+{
+	int control;
+	MouseButton button;
+	LangStringId tip;
+} FILTER_BUTTONS[] = {
+	{IDC_FILTER_LEFT, MOUSE_BUTTON_LEFT, STR_TIP_FILTER_LEFT},
+	{IDC_FILTER_MIDDLE, MOUSE_BUTTON_MIDDLE, STR_TIP_FILTER_MIDDLE},
+	{IDC_FILTER_RIGHT, MOUSE_BUTTON_RIGHT, STR_TIP_FILTER_RIGHT},
+	{IDC_FILTER_X1, MOUSE_BUTTON_X1, STR_TIP_FILTER_X1},
+	{IDC_FILTER_X2, MOUSE_BUTTON_X2, STR_TIP_FILTER_X2},
+};
+
+#define FILTER_BUTTON_COUNT ((int)(sizeof(FILTER_BUTTONS) / sizeof(FILTER_BUTTONS[0])))
+
 // Controls that carry a hover tip, and the string each one shows
+//
+// It started as the filter row's list and now also covers the two buttons whose
+// label cannot carry a whole sentence: "Clear view" has to say that it leaves the
+// files on disk alone, and "Block log" has to say that it holds blocked clicks
+// only. A tip is the cheapest place for both - the alternative was a longer
+// label, and there is no room for one next to four other buttons.
 static const struct
 {
 	int control;
 	LangStringId text;
-} FILTER_TIPS[] = {
-	{IDC_FILTER_AUTO, STR_TIP_FILTER_AUTO},
+} CONTROL_TIPS[] = {
+	{IDC_FILTER_AUTO, STR_TIP_FILTER_ALL},
 	{IDC_FILTER_LEFT, STR_TIP_FILTER_LEFT},
 	{IDC_FILTER_MIDDLE, STR_TIP_FILTER_MIDDLE},
 	{IDC_FILTER_RIGHT, STR_TIP_FILTER_RIGHT},
+	{IDC_FILTER_X1, STR_TIP_FILTER_X1},
+	{IDC_FILTER_X2, STR_TIP_FILTER_X2},
+	{IDC_CLEAR, STR_TIP_CLEAR},
+	{IDC_OPEN_LOG, STR_TIP_LOG_DIR},
 };
 
-#define FILTER_TIP_COUNT ((int)(sizeof(FILTER_TIPS) / sizeof(FILTER_TIPS[0])))
+#define CONTROL_TIP_COUNT ((int)(sizeof(CONTROL_TIPS) / sizeof(CONTROL_TIPS[0])))
 
-// Create the hover tips of the filter controls
+// Create the hover tips listed in CONTROL_TIPS
 //
-// A tooltip is the cheapest way to explain three controls that are disabled
-// most of the time: a new user hovers "Middle" and immediately learns why it
-// cannot be clicked yet, instead of clicking around until something happens.
-static void create_filter_tooltips(HWND hDlg, SettingsWindow *window)
+// A tooltip is the cheapest way to explain a control that is disabled most of the
+// time: a new user hovers "Middle" and immediately learns why it cannot be
+// clicked yet, instead of clicking around until something happens.
+static void create_control_tooltips(HWND hDlg, SettingsWindow *window)
 {
 	window->tooltip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL,
 									  WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
@@ -641,17 +700,33 @@ static void create_filter_tooltips(HWND hDlg, SettingsWindow *window)
 	// Without a max width a long tip becomes a single line across the screen
 	SendMessageW(window->tooltip, TTM_SETMAXTIPWIDTH, 0, 320);
 
-	for (int i = 0; i < FILTER_TIP_COUNT; i++)
+	for (int i = 0; i < CONTROL_TIP_COUNT; i++)
 	{
 		TOOLINFOW tool = {0};
 		tool.cbSize = sizeof(tool);
 		tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
 		tool.hwnd = hDlg;
-		tool.uId = (UINT_PTR)GetDlgItem(hDlg, FILTER_TIPS[i].control);
-		tool.lpszText = (LPWSTR)lang_str(FILTER_TIPS[i].text);
+		tool.uId = (UINT_PTR)GetDlgItem(hDlg, CONTROL_TIPS[i].control);
+		tool.lpszText = (LPWSTR)lang_str(CONTROL_TIPS[i].text);
 
 		if (tool.uId)
 			SendMessageW(window->tooltip, TTM_ADDTOOLW, 0, (LPARAM)&tool);
+	}
+
+	// The status strip needs a tip of its own now that a block is opened by a
+	// click: a square with one character in it cannot explain itself, and the
+	// text is per block, so the tool is added once and its text is replaced as
+	// the pointer moves (see strip_tip_refresh).
+	{
+		TOOLINFOW strip = {0};
+		strip.cbSize = sizeof(strip);
+		strip.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+		strip.hwnd = hDlg;
+		strip.uId = (UINT_PTR)GetDlgItem(hDlg, IDC_STATUS);
+		strip.lpszText = window->strip_tip;
+
+		if (strip.uId)
+			SendMessageW(window->tooltip, TTM_ADDTOOLW, 0, (LPARAM)&strip);
 	}
 }
 
@@ -663,6 +738,23 @@ static void create_filter_tooltips(HWND hDlg, SettingsWindow *window)
 // makes them drift apart. Here all five blocks are laid out in one client
 // rectangle, so a block starts exactly where the last frame ended, at every DPI,
 // with no cross-control alignment to get wrong.
+//
+// The pointer used to open whatever block it was over. That was replaced by a
+// click on 2026-11-28, after real use showed it cannot be made to feel smooth:
+//
+//   * a block's left edge is the sum of the widths before it, so opening the
+//     block under the pointer pushes every block after it away - the thing the
+//     pointer is aiming at keeps moving as the pointer approaches it, which no
+//     easing curve can hide;
+//   * while filtering is paused the verdict block counts down, and a countdown
+//     is a width: a narrower digit is enough to move every hit rectangle to the
+//     right of it, so the block the pointer is over changes by itself;
+//   * the seams made it worse: the pointer is between two blocks for a few
+//     milliseconds on every crossing.
+//
+// So the pointer no longer decides any width. It highlights the block it is over
+// and it is what asks for the tip; a click opens a block. Width only changes
+// once per deliberate action, which is what makes the row still.
 
 static const LangStringId CAP_NAMES[CAP_COUNT] = {
 	STR_CAP_HOOK, STR_CAP_LEARNING, STR_CAP_CONTEXT, STR_CAP_LOG};
@@ -688,6 +780,14 @@ static const LangStringId CAP_SHORT[CAP_COUNT] = {
 //
 // Disabled is desaturated, not lightened: a pale tint would end up brighter
 // than a dimmed "ok" block and read as the healthiest one on the row.
+// The verdict block while filtering is paused. Amber, one step warmer than its
+// normal green: "not broken, but not protecting either".
+//
+// Kept out of the table above on purpose. Paused is a state of one block, not of
+// the four capability states, and adding a fifth column would leave four unused
+// slots that someone will eventually read by mistake.
+static const COLORREF STRIP_PAUSED_COLOR = RGB(0xC7, 0x7A, 0x2B);
+
 static const COLORREF STRIP_LIT[SETTINGS_STATUS_BLOCKS][4] = {
 	// 0: verdict, green
 	{RGB(0x7A, 0x94, 0x84), RGB(0x2E, 0x8B, 0x57), RGB(0x6F, 0xA6, 0x88), RGB(0x1B, 0x5E, 0x3A)},
@@ -778,13 +878,70 @@ static LangStringId block_short_name(int index)
 	return index == 0 ? STR_STATUS_SHORT_STRIP : CAP_SHORT[index - 1];
 }
 
+// Hover tip of the block under the pointer.
+//
+// A collapsed block shows one character, so the words have to come from
+// somewhere. This is also the only place that can say what a click will do,
+// because that depends on whether the block is already open.
+static void strip_tip_refresh(SettingsWindow *window)
+{
+	if (!window || !window->tooltip || !window->hwnd)
+		return;
+
+	window->strip_tip[0] = L'\0';
+
+	int index = window->strip_hover;
+
+	if (index >= 0 && index < SETTINGS_STATUS_BLOCKS)
+	{
+		// The open verdict block is the resting state: a click on it does nothing,
+		// so it gets the caption alone rather than a promise it cannot keep.
+		bool resting_verdict = (index == 0 && window->strip_pinned == 0);
+
+		if (resting_verdict)
+		{
+			StringCchCopyW(window->strip_tip, ARRAYSIZE(window->strip_tip),
+						   window->strip_full[index]);
+		}
+		else
+		{
+			LangStringId hint = (index == window->strip_pinned) ? STR_STRIP_TIP_COLLAPSE
+															   : STR_STRIP_TIP_EXPAND;
+
+			StringCchPrintfW(window->strip_tip, ARRAYSIZE(window->strip_tip), L"%s\n%s",
+							 window->strip_full[index], lang_str(hint));
+		}
+	}
+
+	TOOLINFOW tool = {0};
+	tool.cbSize = sizeof(tool);
+	tool.hwnd = window->hwnd;
+	tool.uFlags = TTF_IDISHWND;
+	tool.uId = (UINT_PTR)GetDlgItem(window->hwnd, IDC_STATUS);
+	tool.lpszText = window->strip_tip;
+
+	SendMessageW(window->tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&tool);
+}
+
 // Fill the caption of one block from its stored state.
 static void status_strip_set_caption(SettingsWindow *window, int index)
 {
 	if (!window || index < 0 || index >= SETTINGS_STATUS_BLOCKS)
 		return;
 
-	if (index == 0)
+	// Paused is neither "protection on" nor "broken": filtering is off because
+	// the user asked it to be, and the block says so with the time left. The
+	// countdown is in minutes and seconds; the pause is capped at 720 minutes,
+	// so the widest caption this can produce is "已暂停 · 剩余 720:00".
+	if (index == 0 && window->strip_paused)
+	{
+		uint32_t left = window->strip_pause_left_s;
+
+		StringCchPrintfW(window->strip_full[0], ARRAYSIZE(window->strip_full[0]),
+						 lang_str(STR_STATUS_STRIP_PAUSED_FMT), (int)(left / 60u),
+						 (int)(left % 60u));
+	}
+	else if (index == 0)
 	{
 		LangStringId text = window->strip_state[0] == (uint8_t)CAP_STATE_OK
 								? STR_STATUS_STRIP_OK
@@ -792,14 +949,58 @@ static void status_strip_set_caption(SettingsWindow *window, int index)
 
 		StringCchCopyW(window->strip_full[0], ARRAYSIZE(window->strip_full[0]),
 					   lang_str(text));
-		return;
+	}
+	else
+	{
+		uint8_t state = cap_clamp(window->strip_state[index]);
+
+		StringCchPrintfW(window->strip_full[index], ARRAYSIZE(window->strip_full[index]),
+						 lang_str(STR_CAP_LABEL_FMT),
+						 lang_str(CAP_NAMES[index - 1]), lang_str(cap_state_text(state)));
 	}
 
-	uint8_t state = cap_clamp(window->strip_state[index]);
+	// The tip quotes the caption, so a caption that changes while the pointer is
+	// on it has to be re-sent. The countdown does exactly that, once a second.
+	if (window->strip_hover == index)
+		strip_tip_refresh(window);
+}
 
-	StringCchPrintfW(window->strip_full[index], ARRAYSIZE(window->strip_full[index]),
-					 lang_str(STR_CAP_LABEL_FMT),
-					 lang_str(CAP_NAMES[index - 1]), lang_str(cap_state_text(state)));
+// Controls whose clicks mean "I am still reading this": the read-only panes and
+// the test area. A click there must not fold the strip back - selecting a line in
+// the log or clicking into the test area is part of the same look, and yanking
+// the row away under the pointer would be the jitter again, only slower.
+static bool keeps_strip_pinned(int control_id)
+{
+	switch (control_id)
+	{
+	case IDC_TESTLOG:
+	case IDC_BLOCKLOG:
+	case IDC_LIVELOG:
+	case IDC_RIPPLE:
+		return true;
+
+	default:
+		return false;
+	}
+}
+
+// Fold the strip back to the verdict block.
+//
+// The expanded block is a drawer, not a setting: it is a temporary look at one
+// module, and there are exactly two moments that put it away - the user clicks
+// somewhere that is not this strip, or the user leaves the window. No timer does
+// it: a row that re-lays itself out while nobody touched it is precisely what
+// the hover model was removed for.
+static void status_strip_reset(HWND hDlg, SettingsWindow *window)
+{
+	if (!window || window->strip_pinned == 0)
+		return;
+
+	window->strip_pinned = 0;
+
+	strip_tip_refresh(window);
+	set_anim_rate(hDlg, window, true);
+	InvalidateRect(GetDlgItem(hDlg, IDC_STATUS), NULL, FALSE);
 }
 
 // Measure every caption and decide how wide its block has to be.
@@ -830,10 +1031,25 @@ static void status_strip_measure(HWND hDlg, SettingsWindow *window)
 	{
 		StatusBlock *block = &window->strip[i];
 		SIZE extent = {0};
+		const wchar_t *caption = window->strip_full[i];
+		wchar_t widest[64];
 
-		if (dc && window->strip_full[i][0])
-			GetTextExtentPoint32W(dc, window->strip_full[i],
-								  (int)wcslen(window->strip_full[i]), &extent);
+		// While paused the verdict block counts down, and a countdown is a width:
+		// one narrower digit, or the tenth minute, moves its right edge. Because
+		// every block after it starts where it ends, that single pixel would shift
+		// the whole row - and the hit rectangles with it. Reserving the width of
+		// the longest form keeps the row still for the entire pause; only the
+		// glyphs inside it change.
+		if (i == 0 && window->strip_paused &&
+			SUCCEEDED(StringCchPrintfW(widest, ARRAYSIZE(widest),
+									   lang_str(STR_STATUS_STRIP_PAUSED_FMT),
+									   CONTEXT_PAUSE_MAX_MINUTES, 0)))
+		{
+			caption = widest;
+		}
+
+		if (dc && caption && caption[0])
+			GetTextExtentPoint32W(dc, caption, (int)wcslen(caption), &extent);
 
 		// 3 px of slack per side: measured width and the real glyph run do not
 		// agree to the pixel, and without it the last character loses a hair.
@@ -885,6 +1101,28 @@ static void layout_status_strip(const SettingsWindow *window, const RECT *area,
 	}
 }
 
+// Same blocks, but each one also owns the seam to its right.
+//
+// This is what makes the strip behave like one object instead of five. With the
+// painted rectangles used for hit testing, the pointer crosses a gap where
+// nothing is hovered, strip_hover drops to -1, and the highlight jumps to
+// nothing for an instant - the "it bounces back and forth" the user reported
+// when the pointer used to open blocks. Every pixel on the strip belongs to
+// exactly one block, so that state is unreachable while the pointer is inside.
+//
+// The painted rectangles are deliberately left alone: the gap stays the dialog
+// background colour, so the five blocks still read as five.
+static void layout_status_strip_hit(const SettingsWindow *window, const RECT *area,
+									RECT blocks[SETTINGS_STATUS_BLOCKS])
+{
+	layout_status_strip(window, area, blocks);
+
+	for (int i = 0; i < SETTINGS_STATUS_BLOCKS - 1; i++)
+		blocks[i].right += SETTINGS_STATUS_GAP;
+
+	// The last block has no seam to its right, so it keeps its painted width
+}
+
 static void draw_status_strip(const DRAWITEMSTRUCT *dis, SettingsWindow *window)
 {
 	RECT area = dis->rcItem;
@@ -922,6 +1160,12 @@ static void draw_status_strip(const DRAWITEMSTRUCT *dis, SettingsWindow *window)
 		COLORREF lit = STRIP_LIT[i][state];
 		COLORREF background = lit;
 
+		// Paused only ever applies to the verdict block, so it is not a column in
+		// STRIP_LIT: widening that table for one block would leave four unused
+		// slots and invite the wrong one being read.
+		if (i == 0 && window->strip_paused)
+			background = STRIP_PAUSED_COLOR;
+
 		SetDCBrushColor(dc, background);
 		FillRect(dc, block, (HBRUSH)GetStockObject(DC_BRUSH));
 
@@ -951,8 +1195,13 @@ static void draw_status_strip(const DRAWITEMSTRUCT *dis, SettingsWindow *window)
 		{
 			// 35% ink on a full-brightness block: the character is a hint of what
 			// the block is, not a label competing with the open one.
+			//
+			// The block under the pointer lights its character instead of growing:
+			// widening is the one thing the click model removed, and this costs no
+			// layout at all, so the pointer cannot move what it is pointing at.
+			float ink_base = (i == window->strip_hover) ? 0.85f : 0.35f;
 			COLORREF ink = lerp_color(background, RGB(255, 255, 255),
-									  0.35f * (1.0f - reveal));
+									  ink_base * (1.0f - reveal));
 
 			draw_centered_text(dc, &text, lang_str(block_short_name(i)), ink,
 							   window->base_font, DT_LEFT);
@@ -981,14 +1230,14 @@ static int status_strip_hit(HWND control, const SettingsWindow *window, POINT po
 	if (!control || !window || !GetClientRect(control, &client))
 		return -1;
 
+	// Hit rectangles, not painted ones: the seam to the right of each block
+	// belongs to that block, so the pointer is never over "nothing" while it is
+	// inside the strip.
 	RECT blocks[SETTINGS_STATUS_BLOCKS];
-	layout_status_strip(window, &client, blocks);
+	layout_status_strip_hit(window, &client, blocks);
 
 	for (int i = 0; i < SETTINGS_STATUS_BLOCKS; i++)
 	{
-		// The gap belongs to nobody: sweeping across the strip collapses every
-		// block for an instant, which reads as one continuous move instead of
-		// two blocks flickering at each other.
 		if (point.x >= blocks[i].left && point.x < blocks[i].right &&
 			point.y >= blocks[i].top && point.y < blocks[i].bottom)
 			return i;
@@ -1020,12 +1269,14 @@ static bool status_strip_tick(SettingsWindow *window, uint64_t now)
 	{
 		StatusBlock *block = &window->strip[i];
 
-		// Exactly one block is always open. With the pointer outside the strip,
-		// or on a gap between blocks, block 0 keeps its caption: the overall
-		// verdict is then permanently on screen, and the row always has the same
-		// silhouette instead of collapsing into five anonymous squares.
-		bool expanded = (i == window->strip_hover) ||
-						(window->strip_hover < 0 && i == 0);
+		// Exactly one block is open, and only a click changes which one. The
+		// pointer deliberately has no say: with widths that add up, opening
+		// whatever it is over keeps moving the target away from it.
+		//
+		// Block 0 is the resting state, so the verdict is the one thing that never
+		// needs a click to read and the row keeps one silhouette instead of
+		// collapsing into five anonymous squares.
+		bool expanded = (i == window->strip_pinned);
 
 		float want = expanded ? block->target : block->idle;
 
@@ -1090,8 +1341,9 @@ static bool status_strip_tick(SettingsWindow *window, uint64_t now)
 	return moving;
 }
 
-// The strip is one control, so hover has to be tracked here: a static does not
-// forward WM_MOUSEMOVE to its parent.
+// The strip is one control, so the pointer has to be tracked here: a static does
+// not forward WM_MOUSEMOVE to its parent, and the click that opens a block lands
+// on the control, not on the dialog.
 static LRESULT CALLBACK status_strip_subclass(HWND hwnd, UINT msg, WPARAM wParam,
 											  LPARAM lParam, UINT_PTR id, DWORD_PTR ref)
 {
@@ -1118,27 +1370,191 @@ static LRESULT CALLBACK status_strip_subclass(HWND hwnd, UINT msg, WPARAM wParam
 		if (hit != window->strip_hover)
 		{
 			window->strip_hover = hit;
+			strip_tip_refresh(window);
 			InvalidateRect(hwnd, NULL, FALSE);
 
-			// The block that just started moving needs frames; a settled strip
-			// lets the timer fall back to its idle rate by itself.
-			set_anim_rate(GetParent(hwnd), window, true);
+			// No set_anim_rate here on purpose: hovering only lights a character,
+			// it does not move anything, so there is no animation to drive. The
+			// fast rate would be sixty wake-ups a second for a repaint that has
+			// already happened.
 		}
 
-		return 0;
+		// Fall through to the rest of the subclass chain on purpose: the tip is
+		// added with TTF_SUBCLASS, which is itself a subclass installed on this
+		// same control, and it only learns that the pointer is there from this
+		// very message. Swallowing it here means the tip never appears at all.
+		break;
 	}
 
 	case WM_MOUSELEAVE:
 		if (window && window->strip_hover >= 0)
 		{
 			window->strip_hover = -1;
+			strip_tip_refresh(window);
 			InvalidateRect(hwnd, NULL, FALSE);
+		}
+		break;
+
+	case WM_SETCURSOR:
+		// A hand is the only affordance a 21 px square has room for, and it is
+		// what tells the user the block can be clicked at all.
+		if (LOWORD(lParam) == HTCLIENT)
+		{
+			SetCursor(LoadCursorW(NULL, IDC_HAND));
+			return TRUE;
+		}
+		break;
+
+	case WM_LBUTTONUP:
+	{
+		if (!window)
+			break;
+
+		POINT point = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+		int hit = status_strip_hit(hwnd, window, point);
+
+		if (hit >= 0)
+		{
+			// Clicking the open block folds it back to the verdict. Clicking the
+			// verdict block while it is already open is a no-op: that is the
+			// resting state, and there is no "nothing is open" state to fall into.
+			window->strip_pinned = (hit == window->strip_pinned) ? 0 : hit;
+
+			strip_tip_refresh(window);
+			InvalidateRect(hwnd, NULL, FALSE);
+
+			// This is the only thing that moves the row now, so it is also the
+			// only place that has to make sure frames are being drawn.
 			set_anim_rate(GetParent(hwnd), window, true);
 		}
-		return 0;
+
+		// Same reason as WM_MOUSEMOVE: let the tip see the click so it can hide.
+		break;
+	}
 
 	case WM_NCDESTROY:
 		RemoveWindowSubclass(hwnd, status_strip_subclass, id);
+		break;
+
+	default:
+		break;
+	}
+
+	return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+// Draw the unmarked hot zone
+//
+// Nothing at all unless the pointer is on it: the zone exists so that the title
+// row does not carry a control nobody needs, and a permanently visible hint would
+// be exactly that control again. The hint is drawn instead of shown as a tooltip
+// because a tooltip arrives half a second later, which is too late to feel like
+// an invitation.
+static void draw_egg_zone(const DRAWITEMSTRUCT *item, const SettingsWindow *window)
+{
+	FillRect(item->hDC, &item->rcItem, GetSysColorBrush(COLOR_BTNFACE));
+
+	if (!window || !window->egg_hover)
+		return;
+
+	HFONT font = (HFONT)SendMessageW(item->hwndItem, WM_GETFONT, 0, 0);
+	HGDIOBJ old_font = font ? SelectObject(item->hDC, font) : NULL;
+
+	SetBkMode(item->hDC, TRANSPARENT);
+	SetTextColor(item->hDC, GetSysColor(COLOR_GRAYTEXT));
+
+	RECT box = item->rcItem;
+	DrawTextW(item->hDC, lang_str(STR_EGG_HINT), -1, &box,
+			  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+	if (old_font)
+		SelectObject(item->hDC, old_font);
+}
+
+// The hot zone's menu: one item, checked from the window's own style
+//
+// The state is read here and written there - no copy of "is on top" exists in
+// this program, so the check mark cannot disagree with the window.
+static void egg_zone_menu(HWND hDlg)
+{
+	HMENU menu = CreatePopupMenu();
+
+	if (!menu)
+		return;
+
+	bool on_top = (GetWindowLongPtrW(hDlg, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+
+	AppendMenuW(menu, MF_STRING | (on_top ? MF_CHECKED : 0), SETTINGS_EGG_ALWAYS_ON_TOP,
+				lang_str(STR_ALWAYS_ON_TOP));
+
+	POINT point;
+	GetCursorPos(&point);
+
+	int command = (int)TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+									  point.x, point.y, 0, hDlg, NULL);
+
+	DestroyMenu(menu);
+
+	// Same courtesy the tray menu pays: a click that dismisses a popup can
+	// otherwise be swallowed by whatever window is under the pointer.
+	PostMessageW(hDlg, WM_NULL, 0, 0);
+
+	if (command != SETTINGS_EGG_ALWAYS_ON_TOP)
+		return;
+
+	SetWindowPos(hDlg, on_top ? HWND_NOTOPMOST : HWND_TOPMOST, 0, 0, 0, 0,
+				 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+// Hover tracking and the right click for the hot zone
+static LRESULT CALLBACK egg_zone_subclass(HWND hwnd, UINT msg, WPARAM wParam,
+										  LPARAM lParam, UINT_PTR id, DWORD_PTR ref)
+{
+	SettingsWindow *window = (SettingsWindow *)ref;
+
+	switch (msg)
+	{
+	case WM_MOUSEMOVE:
+		// Only the first move is interesting: it arms the leave notification, and
+		// the rest are handled by DefSubclassProc so nothing else is swallowed
+		// (the same trap the strip fell into with its tooltip).
+		if (window && !window->egg_hover)
+		{
+			TRACKMOUSEEVENT track = {0};
+			track.cbSize = sizeof(track);
+			track.dwFlags = TME_LEAVE;
+			track.hwndTrack = hwnd;
+
+			if (TrackMouseEvent(&track))
+			{
+				window->egg_hover = true;
+				InvalidateRect(hwnd, NULL, TRUE);
+			}
+		}
+
+		break;
+
+	case WM_MOUSELEAVE:
+		if (window && window->egg_hover)
+		{
+			window->egg_hover = false;
+			InvalidateRect(hwnd, NULL, TRUE);
+		}
+
+		break;
+
+	case WM_RBUTTONUP:
+		egg_zone_menu(GetParent(hwnd));
+		return 0;
+
+	case WM_SETCURSOR:
+		// The zone is empty, so the cursor is the only thing that says "there is
+		// something here" before the pointer stops.
+		SetCursor(LoadCursorW(NULL, IDC_HAND));
+		return TRUE;
+
+	case WM_NCDESTROY:
+		RemoveWindowSubclass(hwnd, egg_zone_subclass, id);
 		break;
 
 	default:
@@ -1165,7 +1581,13 @@ static void refresh_capabilities(HWND hDlg, SettingsWindow *window,
 	if (verdict != window->strip_state[0])
 	{
 		window->strip_state[0] = verdict;
-		status_strip_set_caption(window, 0);
+
+		// While paused the caption belongs to the pause, not to the verdict: the
+		// hook can be perfectly healthy with filtering switched off, and the pause
+		// handler in refresh_live owns the caption in that case.
+		if (!window->strip_paused)
+			status_strip_set_caption(window, 0);
+
 		changed = true;
 	}
 
@@ -1253,18 +1675,18 @@ static void update_status_bar(HWND hDlg, SettingsWindow *window,
 // Repoint the hover tips at the active language
 // The tooltip keeps the pointer it was given, so the text has to be replaced as
 // well; leaving it alone would show the old language after a switch.
-static void update_filter_tooltips(HWND hDlg, SettingsWindow *window)
+static void update_control_tooltips(HWND hDlg, SettingsWindow *window)
 {
 	if (!window || !window->tooltip)
 		return;
 
-	for (int i = 0; i < FILTER_TIP_COUNT; i++)
+	for (int i = 0; i < CONTROL_TIP_COUNT; i++)
 	{
 		TOOLINFOW tool = {0};
 		tool.cbSize = sizeof(tool);
 		tool.hwnd = hDlg;
-		tool.uId = (UINT_PTR)GetDlgItem(hDlg, FILTER_TIPS[i].control);
-		tool.lpszText = (LPWSTR)lang_str(FILTER_TIPS[i].text);
+		tool.uId = (UINT_PTR)GetDlgItem(hDlg, CONTROL_TIPS[i].control);
+		tool.lpszText = (LPWSTR)lang_str(CONTROL_TIPS[i].text);
 
 		if (tool.uId)
 			SendMessageW(window->tooltip, TTM_UPDATETIPTEXTW, 0, (LPARAM)&tool);
@@ -1272,23 +1694,26 @@ static void update_filter_tooltips(HWND hDlg, SettingsWindow *window)
 }
 
 // Apply the filter state to the check boxes and the log contents
-// The three radios are only usable when Auto is off, and switching the view
+// The five radios are only usable when "All" is off, and switching the view
 // starts a fresh log so the two never contradict each other.
+//
+// CheckDlgButton per control, not CheckRadioButton: BS_AUTORADIOBUTTON only makes
+// the group exclusive for mouse clicks. Code that fills the state back in has to
+// clear every other button itself, or two of them end up looking selected.
 static void update_filter_ui(HWND hDlg, SettingsWindow *window, bool reset_view)
 {
 	bool manual = !window->filter_auto;
 
-	EnableWindow(GetDlgItem(hDlg, IDC_FILTER_LEFT), manual);
-	EnableWindow(GetDlgItem(hDlg, IDC_FILTER_MIDDLE), manual);
-	EnableWindow(GetDlgItem(hDlg, IDC_FILTER_RIGHT), manual);
+	for (int i = 0; i < FILTER_BUTTON_COUNT; i++)
+	{
+		HWND radio = GetDlgItem(hDlg, FILTER_BUTTONS[i].control);
+		bool chosen = manual && window->filter_button == FILTER_BUTTONS[i].button;
+
+		EnableWindow(radio, manual);
+		CheckDlgButton(hDlg, FILTER_BUTTONS[i].control, chosen ? BST_CHECKED : BST_UNCHECKED);
+	}
 
 	CheckDlgButton(hDlg, IDC_FILTER_AUTO, window->filter_auto ? BST_CHECKED : BST_UNCHECKED);
-	CheckDlgButton(hDlg, IDC_FILTER_LEFT,
-				   (manual && window->filter_button == MOUSE_BUTTON_LEFT) ? BST_CHECKED : BST_UNCHECKED);
-	CheckDlgButton(hDlg, IDC_FILTER_MIDDLE,
-				   (manual && window->filter_button == MOUSE_BUTTON_MIDDLE) ? BST_CHECKED : BST_UNCHECKED);
-	CheckDlgButton(hDlg, IDC_FILTER_RIGHT,
-				   (manual && window->filter_button == MOUSE_BUTTON_RIGHT) ? BST_CHECKED : BST_UNCHECKED);
 
 	if (reset_view)
 		clear_logs(hDlg, window);
@@ -1306,21 +1731,22 @@ static void apply_language(HWND hDlg)
 
 	SetDlgItemTextW(hDlg, IDC_GROUP_TEST, lang_str(STR_GROUP_TEST));
 	SetDlgItemTextW(hDlg, IDC_GROUP_LOG, lang_str(STR_GROUP_LOG));
+	SetDlgItemTextW(hDlg, IDC_GROUP_LIVE, lang_str(STR_GROUP_LIVE));
 	SetDlgItemTextW(hDlg, IDC_GROUP_STATS, lang_str(STR_GROUP_STATS));
-	SetDlgItemTextW(hDlg, IDC_GROUP_DIAG, lang_str(STR_GROUP_DIAG));
 
-	SetDlgItemTextW(hDlg, IDC_FILTER_AUTO, lang_str(STR_AUTO));
-	SetDlgItemTextW(hDlg, IDC_FILTER_LEFT, lang_button_name(MOUSE_BUTTON_LEFT));
-	SetDlgItemTextW(hDlg, IDC_FILTER_MIDDLE, lang_button_name(MOUSE_BUTTON_MIDDLE));
-	SetDlgItemTextW(hDlg, IDC_FILTER_RIGHT, lang_button_name(MOUSE_BUTTON_RIGHT));
+	SetDlgItemTextW(hDlg, IDC_FILTER_AUTO, lang_str(STR_FILTER_ALL));
+
+	// Short labels, one row of six. The rc widths were measured against exactly
+	// these words - see the comment on the filter controls in MouseMend.rc.
+	for (int i = 0; i < FILTER_BUTTON_COUNT; i++)
+		SetDlgItemTextW(hDlg, FILTER_BUTTONS[i].control, lang_filter_label(FILTER_BUTTONS[i].button));
 
 	// The one line under the radios that explains why they look dead
 	SetDlgItemTextW(hDlg, IDC_FILTER_HINT, lang_str(STR_FILTER_HINT));
 
-	SetDlgItemTextW(hDlg, IDC_DIAGHINT, lang_str(STR_DIAG_HINT));
 	SetDlgItemTextW(hDlg, IDC_VERSION_NOTES, lang_str(STR_VERSION_NOTES));
 	SetDlgItemTextW(hDlg, IDC_LOG_HELP, lang_str(STR_VERDICT_HELP_NAME));
-	SetDlgItemTextW(hDlg, IDC_REFRESH, lang_str(STR_REFRESH));
+	SetDlgItemTextW(hDlg, IDC_SETTINGS, lang_str(STR_SETTINGS_BUTTON));
 	SetDlgItemTextW(hDlg, IDC_CLEAR, lang_str(STR_CLEAR));
 	SetDlgItemTextW(hDlg, IDC_OPEN_LOG, lang_str(STR_LOG_DIR_BUTTON));
 	SetDlgItemTextW(hDlg, IDC_CLOSE, lang_str(STR_CLOSE));
@@ -1332,6 +1758,11 @@ static void apply_language(HWND hDlg)
 
 	SetDlgItemTextW(hDlg, IDC_TESTLOG_HDR, header);
 	SetDlgItemTextW(hDlg, IDC_BLOCKLOG_HDR, header);
+
+	// All three panes carry the same five columns, so they share one header: the
+	// live pane pairs each press with its release, which is what gives it the hold
+	// time the test log has always shown.
+	SetDlgItemTextW(hDlg, IDC_LIVE_HDR, header);
 
 	// The idle hint lives inside the test area, so it is painted, not set
 	InvalidateRect(GetDlgItem(hDlg, IDC_RIPPLE), NULL, TRUE);
@@ -1420,10 +1851,20 @@ static void resume_live(HWND hDlg, SettingsWindow *window)
 // on screen is kept, so reopening it shows the same session.
 static void hide_to_tray(HWND hDlg, SettingsWindow *window)
 {
+	// The drawer goes back to the verdict while nobody can see it. Doing this on
+	// the way out instead of on a timer means the fold never happens in front of
+	// the user: the window is already gone when the widths change, and every open
+	// starts from the same picture.
+	if (window)
+		window->strip_pinned = 0;
+
 	suspend_live(hDlg, window);
 	ShowWindow(hDlg, SW_HIDE);
 
-	if (window->on_hidden)
+	// window may be NULL (a close that arrives before the window registered
+	// itself), and the analyser is right that the unchecked dereference below
+	// was one path away from a crash.
+	if (window && window->on_hidden)
 		window->on_hidden(window->hidden_user);
 }
 
@@ -1463,19 +1904,25 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		window->gap_samples = 0;
 		window->near_miss_count = 0;
 		window->near_miss_min_ms = 0;
-		window->last_diag_tick = 0;
+
+		// A revision that cannot match, so the first tick paints the live pane
+		// even when the history is still empty
+		window->live_revision = 0xFFFFFFFFu;
 		window->pending_panes = 0;
 		window->panes_painted_ms = 0;
 		window->anim_fast = false;
 		window->last_anim_ms = GetTickCount64();
 		ripple_view_reset(&window->ripple);
 
-		// The strip starts collapsed: every block at its square width, nothing
-		// lit, and no pointer. The first measurement turns the zero widths into
-		// the real square size before anything is painted.
+		// The strip starts on the verdict block: block 0 is the resting state, so
+		// the row opens with the one caption it is supposed to always be able to
+		// answer. Every width is still zero here; the first measurement turns them
+		// into the real square size before anything is painted.
 		memset(window->strip, 0, sizeof(window->strip));
 		memset(window->strip_state, 0, sizeof(window->strip_state));
 		window->strip_hover = -1;
+		window->strip_pinned = 0;
+		window->strip_tip[0] = L'\0';
 
 		if (window->trace)
 			event_trace_clear(window->trace);
@@ -1512,11 +1959,11 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 
 		if (window->log_font)
 		{
-			// The two column headers share the font: their padding is computed in
-			// cells, and a proportional font would break the alignment with the
-			// rows underneath.
-			const int pane_controls[] = {IDC_TESTLOG, IDC_BLOCKLOG, IDC_DIAG,
-										 IDC_TESTLOG_HDR, IDC_BLOCKLOG_HDR};
+			// Every pane and every column header shares the font: their padding is
+			// computed in cells, and a proportional font would break the alignment
+			// between a header and the rows underneath it.
+			const int pane_controls[] = {IDC_TESTLOG, IDC_BLOCKLOG, IDC_LIVELOG,
+										 IDC_TESTLOG_HDR, IDC_BLOCKLOG_HDR, IDC_LIVE_HDR};
 
 			for (int i = 0; i < (int)(sizeof(pane_controls) / sizeof(pane_controls[0])); i++)
 			{
@@ -1527,7 +1974,7 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 
 		apply_language(hDlg);
 		window->applied_language = language_get();
-		create_filter_tooltips(hDlg, window);
+		create_control_tooltips(hDlg, window);
 
 		// Hand-drawn text has to select the dialog font itself; without this it
 		// would come out in the stock system font and look foreign.
@@ -1549,14 +1996,14 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		if (strip)
 			SetWindowSubclass(strip, status_strip_subclass, 1, (DWORD_PTR)window);
 
+		// The hot zone has to see its own mouse messages: a static does not pass
+		// them to the dialog, and this one has no text of its own to react to.
+		HWND egg = GetDlgItem(hDlg, IDC_EGG_ZONE);
+		if (egg)
+			SetWindowSubclass(egg, egg_zone_subclass, 3, (DWORD_PTR)window);
+
 		update_filter_ui(hDlg, window, false);
 		clear_logs(hDlg, window);
-
-		// Not built here: the report installs a probe hook, reads the registry and
-		// writes a probe value, and all of that sits between the user and the first
-		// usable frame on a thread that also serves the mouse hook. The window is
-		// shown first, the report arrives a moment later.
-		PostMessageW(hDlg, SETTINGS_MSG_BUILD_REPORT, 0, 0);
 
 		refresh_live(hDlg, window);
 
@@ -1597,6 +2044,11 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 			update_capture_rect(hDlg, window);
 
 			refresh_live(hDlg, window);
+
+			// The live pane is on the slow timer on purpose: it is a log for a
+			// human to read, not an animation, and the revision check inside means
+			// an idle window does no work at all here.
+			render_live_log(hDlg, window);
 			return TRUE;
 		}
 
@@ -1648,11 +2100,6 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 
 		return TRUE;
 
-	case SETTINGS_MSG_BUILD_REPORT:
-		// The window is up by now, so the probe costs nothing the user can see
-		refresh_diagnostics(hDlg, window, true);
-		return TRUE;
-
 	case WM_DRAWITEM:
 	{
 		const DRAWITEMSTRUCT *item = (const DRAWITEMSTRUCT *)lParam;
@@ -1670,11 +2117,29 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 			return TRUE;
 		}
 
+		if (item && item->CtlID == IDC_EGG_ZONE)
+		{
+			draw_egg_zone(item, window);
+			return TRUE;
+		}
+
 		break;
 	}
 
 	case WM_COMMAND:
-		switch (LOWORD(wParam))
+	{
+		int control = (int)LOWORD(wParam);
+
+		// A command from another control means the user moved on to something
+		// else, and that is the standard way out of a drawer. This is deliberately
+		// not WM_PARENTNOTIFY: that message does not reach the dialog procedure
+		// (measured), and every control worth resetting on - buttons, radios and
+		// the text panes - reports a command anyway. The strip's own notification
+		// must not fold it back, and the panes only report focus.
+		if (window && control != IDC_STATUS && !keeps_strip_pinned(control))
+			status_strip_reset(hDlg, window);
+
+		switch (control)
 		{
 		case IDOK:
 		case IDCANCEL:
@@ -1685,6 +2150,16 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 				hide_to_tray(hDlg, window);
 			return TRUE;
 
+		case IDC_SETTINGS:
+			// TODO(2.6.x): this button opens the settings window. That window does
+			// not exist yet, so the button explains itself in the status bar - and
+			// THIS BRANCH MUST GO when the window is built, together with
+			// STR_SETTINGS_PENDING. Leaving it would answer a working button with
+			// "coming soon".
+			if (window && window->notice)
+				window->notice(window->notice_user, lang_str(STR_SETTINGS_PENDING), 10000);
+			return TRUE;
+
 		case IDC_VERSION_NOTES:
 			help_window_show(hDlg, (HINSTANCE)GetWindowLongPtrW(hDlg, GWLP_HINSTANCE),
 							 HELP_TOPIC_VERSIONS);
@@ -1693,10 +2168,6 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		case IDC_LOG_HELP:
 			help_window_show(hDlg, (HINSTANCE)GetWindowLongPtrW(hDlg, GWLP_HINSTANCE),
 							 HELP_TOPIC_VERDICTS);
-			return TRUE;
-
-		case IDC_REFRESH:
-			refresh_diagnostics(hDlg, window, true);
 			return TRUE;
 
 		case IDC_CLEAR:
@@ -1720,14 +2191,23 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		case IDC_FILTER_LEFT:
 		case IDC_FILTER_MIDDLE:
 		case IDC_FILTER_RIGHT:
+		case IDC_FILTER_X1:
+		case IDC_FILTER_X2:
 			if (window && HIWORD(wParam) == BN_CLICKED)
 			{
-				// A radio can only be clicked while Auto is off, but the state is
+				// A radio can only be clicked while "All" is off, but the state is
 				// set explicitly so the two controls can never disagree
 				window->filter_auto = false;
-				window->filter_button = (LOWORD(wParam) == IDC_FILTER_LEFT)	 ? MOUSE_BUTTON_LEFT
-										: (LOWORD(wParam) == IDC_FILTER_MIDDLE) ? MOUSE_BUTTON_MIDDLE
-																			   : MOUSE_BUTTON_RIGHT;
+
+				for (int i = 0; i < FILTER_BUTTON_COUNT; i++)
+				{
+					if (FILTER_BUTTONS[i].control != control)
+						continue;
+
+					window->filter_button = FILTER_BUTTONS[i].button;
+					break;
+				}
+
 				update_filter_ui(hDlg, window, true);
 			}
 			return TRUE;
@@ -1735,6 +2215,14 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 		default:
 			break;
 		}
+
+		break;
+	}
+
+	case WM_LBUTTONDOWN:
+		// A click on the dialog itself, away from every control
+		if (window)
+			status_strip_reset(hDlg, window);
 		break;
 
 	case WM_CLOSE:
@@ -1798,7 +2286,8 @@ static INT_PTR CALLBACK settings_dialog_proc(HWND hDlg, UINT message, WPARAM wPa
 
 // Create the window, or bring the existing one to the front
 bool settings_window_open(SettingsWindow *window, HINSTANCE hInstance, HWND owner,
-						  SettingsSnapshotFn snapshot, void *user, EventTrace *trace)
+						  SettingsSnapshotFn snapshot, void *user, EventTrace *trace,
+						  EventHistory *history)
 {
 	if (!window || !snapshot)
 		return false;
@@ -1819,6 +2308,7 @@ bool settings_window_open(SettingsWindow *window, HINSTANCE hInstance, HWND owne
 	window->snapshot = snapshot;
 	window->snapshot_user = user;
 	window->trace = trace;
+	window->history = history;
 
 	HWND hDlg = CreateDialogParamW(hInstance, MAKEINTRESOURCEW(IDD_SETTINGS), owner,
 								   settings_dialog_proc, (LPARAM)window);
@@ -1859,4 +2349,14 @@ void settings_window_set_hidden_handler(SettingsWindow *window,
 
 	window->on_hidden = handler;
 	window->hidden_user = user;
+}
+
+void settings_window_set_notice_handler(SettingsWindow *window,
+										SettingsNoticeFn handler, void *user)
+{
+	if (!window)
+		return;
+
+	window->notice = handler;
+	window->notice_user = user;
 }

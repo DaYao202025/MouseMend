@@ -19,6 +19,11 @@
 
 #define EVENT_TRACE_CAPACITY 128
 
+// Room for a program name as the context filter publishes it. Longer names are
+// truncated: the live log has one column for this and "ApplicationFrameHost.exe"
+// is 24 characters, so 32 is a whole column's worth with room to spare.
+#define EVENT_TRACE_PROCESS_CHARS 32
+
 typedef struct
 {
 	MouseButton button;
@@ -26,6 +31,28 @@ typedef struct
 	long x;				// Screen coordinates, so the window can hit test a ripple
 	long y;
 	bool is_down; // Wheel events report false here, exactly like the hook
+
+	// Wheel delta, straight from the hook: 0 for buttons, and for a wheel the sign
+	// is the only thing that tells "scrolled up" from "scrolled down". Kept so the
+	// test area can draw the direction inside the ring.
+	int32_t data;
+
+	// The program the verdict was made for, copied from the published context
+	// slot, plus its pid. pid is not displayed anywhere yet: it is the piece a
+	// future "learn per program" would need, and adding it here costs nothing
+	// while adding it later would touch all three push sites.
+	//
+	// Known limitation, written here on purpose: the slot is refreshed by a 300 ms
+	// polling thread, and the click that brings a window to the front is delivered
+	// before that poll has seen it. The first event after switching programs can
+	// therefore carry the previous program's name. The entry is still honest about
+	// the decision - the engine really did use that slot - and a separator is only
+	// written when the name changes, so at most one line is affected per switch.
+	// Resolving the name inside the hook is not an option: a user32 call on that
+	// stack risks Windows silently removing the hook.
+	wchar_t process[EVENT_TRACE_PROCESS_CHARS];
+	int32_t pid;
+
 	DebounceDecision decision;
 } TraceEntry;
 

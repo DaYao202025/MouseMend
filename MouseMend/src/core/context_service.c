@@ -51,10 +51,12 @@ static DWORD WINAPI context_thread(LPVOID param)
 		last_pid = pid;
 		last_revision = revision;
 
-		// Our own window is never filtered, whatever the lists say.
+		// Our own window is never filtered, whatever the lists say. It is still
+		// named: the live log says which program a decision was made for, and
+		// "unknown" for the one window we know for certain would be a lie.
 		if (pid == GetCurrentProcessId())
 		{
-			context_filter_publish(service->filter, pid, false, true, L"");
+			context_filter_publish(service->filter, pid, false, true, service->own_name);
 			continue;
 		}
 
@@ -90,17 +92,16 @@ static DWORD WINAPI context_thread(LPVOID param)
 		// observed is deliberately left untouched: the status strip then reports
 		// the context module as waiting for data instead of claiming it works.
 		//
-		// KNOWN LIMITATION, left in place on purpose: policy.recent_name is not
-		// cleared here, because it feeds "exclude the program in front" in the
-		// tray menu and clearing it would remove that entry exactly when the user
-		// cannot tell what to exclude. The consequence is a visible mismatch -
-		// the status bar says "waiting for a program" while the menu still offers
-		// to exclude the last one that could be resolved. Fixing it properly needs
-		// a decision about what that menu entry should do with no known program,
-		// which is why it is a separate change and not part of this one.
+		// The one-click rule is cleared with it. This used to be left alone "so the
+		// menu keeps offering something", but that entry names the *previous*
+		// program: with an elevated window in front, "do not filter chrome.exe"
+		// (written from the stale name) is a rule for a program the user is not
+		// looking at. A missing shortcut is a nuisance; a rule for the wrong
+		// program changes what gets filtered and leaves no trace.
 		if (!path[0] || !name[0])
 		{
 			last_pid = 0;
+			note_recent(service->filter, L"", L"");
 			context_filter_publish(service->filter, 0, false, false, L"");
 			continue;
 		}
@@ -122,6 +123,16 @@ bool context_service_start(ContextService *service, ContextFilter *filter)
 
 	memset(service, 0, sizeof(*service));
 	service->filter = filter;
+
+	// Once, not per tick: the answer cannot change while the program runs, and the
+	// polling thread has better things to do every 300 ms.
+	{
+		wchar_t self[CONTEXT_PATH_CHARS] = {0};
+		DWORD length = GetModuleFileNameW(NULL, self, ARRAYSIZE(self));
+
+		if (length > 0 && length < ARRAYSIZE(self))
+			context_file_name_from_path(self, service->own_name, ARRAYSIZE(service->own_name));
+	}
 
 	service->stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
 	if (!service->stop_event)

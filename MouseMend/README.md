@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-2.4.2-blue.svg)
+![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey.svg)
 ![Language](https://img.shields.io/badge/language-C-informational.svg)
 ![Toolset](https://img.shields.io/badge/toolset-MSVC%20v145-purple.svg)
@@ -272,7 +272,9 @@ MouseMend 常驻托盘，在软件层过滤鼠标事件流 —— 让磨损的�
   显示。"共拦截 0 次（临界 7 次）"的意思是：鼠标已经在坏了，只是阈值还在替你挡。
 * **悬浮即看** —— 鼠标停在托盘图标上就能看到版本、防护状态、本会话已拦截次数。
 * **拦截气泡提示（默认关）** —— 全屏程序或演示模式下自动静默，最快 20 秒一次。
-* **拦截历史（默认关）** —— 一天一个文件，只有真的拦到东西才写盘。
+* **拦截记录（默认关）** —— 一天一个文件，只有真的拦到东西才写盘。每行带时间、
+  当时所在的程序、按键、按下还是松开，以及当时生效的阈值——事后能看出"在哪个软件里
+  点的"，而不只是一串时间戳。
 * **看门狗** —— 低级鼠标钩子可能被系统静默摘掉。看门狗会发现"没有输入"这件事，
   重装钩子并重采样基线，最快 30 秒一次。
 * **一个文件搞定崩溃报告** —— 万一进程真的挂了，会在程序旁边生成**一个 zip**：
@@ -625,7 +627,7 @@ Released under the MIT licence — see [LICENSE](LICENSE).<br>
 
 <div align="center">
 
-**MouseMend 2.4.2** — MIT licensed, built with plain C and the Win32 API.<br>
-**MouseMend 2.4.2** —— MIT 许可证，纯 C 与 Win32 API 实现。
+**MouseMend 2.5.0** — MIT licensed, built with plain C and the Win32 API.<br>
+**MouseMend 2.5.0** —— MIT 许可证，纯 C 与 Win32 API 实现。
 
 </div>

@@ -6,6 +6,8 @@
 #include "../core/app_snapshot.h"
 #include "../core/config.h"
 #include "../core/debouncer.h"
+#include "../core/event_history.h"
+#include "../core/event_trace.h"
 #include "language.h"
 
 // Pure text rendering for the check-up window.
@@ -86,6 +88,15 @@ void log_pane_push(LogPane *pane, const ClickRow *row);
 // Render a whole pane into the text the edit control displays
 void log_pane_render(const AppSnapshot *snapshot, const LogPane *pane,
 					 wchar_t *buffer, size_t buffer_count);
+
+// Render the live pane from the always-on history, newest first.
+//
+// entries come from EventHistory (already newest first). One row per event and a
+// section label whenever the program changes - the label carries the name so the
+// rows do not have to repeat it on every line. No hold column: a live row is an
+// event, and the release that would give it a hold time may still be coming.
+void log_format_live_pane(const AppSnapshot *snapshot, const TraceEntry *entries, uint32_t count,
+						  wchar_t *buffer, size_t buffer_count);
 
 // Build the conclusion line: the one thing a user actually wants to know
 void log_format_status(const AppSnapshot *snapshot, wchar_t *buffer, size_t buffer_count);

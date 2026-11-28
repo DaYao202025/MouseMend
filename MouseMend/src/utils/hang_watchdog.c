@@ -108,9 +108,23 @@ void hang_watchdog_stop(void)
 		// Bounded on purpose. If the watcher happens to be inside the dump
 		// writer, waiting for it without a limit would turn a clean exit into a
 		// hang caused by the thing that watches for hangs.
-		WaitForSingleObject(g_thread, 3000);
-		CloseHandle(g_thread);
-		g_thread = NULL;
+		//
+		// On timeout the handle and the pointer are deliberately kept, exactly
+		// like learning_service_stop: the thread is still running and may be
+		// reading the structures the caller is about to destroy, so closing the
+		// handle here would only hide a live thread from us. Leaving it alone
+		// means the process is about to exit with one thread inside it, which is
+		// what the operating system is for.
+		if (WaitForSingleObject(g_thread, 3000) == WAIT_OBJECT_0)
+		{
+			CloseHandle(g_thread);
+			g_thread = NULL;
+		}
+		else
+		{
+			g_stop_event = NULL; // still owned by the thread that is running
+			return;
+		}
 	}
 
 	if (g_stop_event)

@@ -84,7 +84,25 @@ typedef enum
 
 	// Check-up window
 	STR_GROUP_LOG,
-	STR_AUTO,
+	STR_GROUP_LIVE,
+	STR_LIVE_SECTION_FMT,
+	STR_LIVE_UNKNOWN,
+	// The label of the "no per button filter" switch. It used to read "Auto",
+	// which stopped being true once it sat next to five buttons: what it does is
+	// show every button, and that is what it now says.
+	STR_FILTER_ALL,
+
+	// The always-on-top entry. It has no visible switch any more: the title row
+	// carries an unmarked hot zone that opens a one item menu on right click, and
+	// this is that item's label.
+	STR_ALWAYS_ON_TOP,
+
+	// Hint drawn inside that hot zone while the pointer is on it
+	STR_EGG_HINT,
+
+	// The settings button, which is a placeholder until that window exists
+	STR_SETTINGS_BUTTON,
+	STR_SETTINGS_PENDING,
 	STR_LOG_COL_TIME,
 	STR_LOG_COL_BUTTON,
 	STR_LOG_COL_GAP,
@@ -102,8 +120,13 @@ typedef enum
 	STR_VERDICT_IGNORE_INJECTED,
 	STR_VERDICT_IGNORE_UNMONITORED,
 	STR_VERDICT_IGNORE_WHEEL_ZERO,
+	// "Clear view", not "Clear log": the button empties the window, and the
+	// files in the log folder are untouched. The old label promised more than it
+	// did, and the tip below says what the boundary is.
 	STR_CLEAR,
 	STR_LOG_DIR_BUTTON,
+	STR_TIP_CLEAR,
+	STR_TIP_LOG_DIR,
 	STR_STATS_SUMMARY_FMT,
 	STR_STATS_CLICKS_FMT,
 	STR_GROUP_STATS_NEAR_FMT,
@@ -124,10 +147,12 @@ typedef enum
 
 	// Filter help (check-up window)
 	STR_FILTER_HINT,
-	STR_TIP_FILTER_AUTO,
+	STR_TIP_FILTER_ALL,
 	STR_TIP_FILTER_LEFT,
 	STR_TIP_FILTER_MIDDLE,
 	STR_TIP_FILTER_RIGHT,
+	STR_TIP_FILTER_X1,
+	STR_TIP_FILTER_X2,
 
 	// Tray balloon shown when the window opens at startup
 	STR_TRAY_BALLOON_TITLE,
@@ -158,6 +183,11 @@ typedef enum
 	STR_LEARNING_STATUS_FMT,
 	STR_PAUSE_CONTEXT,
 	STR_RESUME_CONTEXT,
+	STR_PAUSE_5,
+	STR_PAUSE_10,
+	STR_PAUSE_30,
+	STR_PAUSE_CUSTOM,
+	STR_PAUSE_PROMPT_FMT,
 	STR_EXCLUDE_CURRENT,
 	STR_CONTEXT_STATUS_FMT,
 
@@ -207,6 +237,9 @@ typedef enum
 	STR_STATUS_SHORT_BAD,
 	STR_STATUS_STRIP_OK,
 	STR_STATUS_STRIP_BAD,
+	STR_STATUS_STRIP_PAUSED_FMT,
+	STR_STRIP_TIP_EXPAND,	// "click to expand" - a collapsed block
+	STR_STRIP_TIP_COLLAPSE, // "click to collapse" - the block that is open
 	STR_STATUS_SHORT_STRIP,
 	STR_CAP_SHORT_HOOK,
 	STR_CAP_SHORT_LEARNING,
@@ -238,8 +271,16 @@ const wchar_t *lang_str(LangStringId id);
 // Get the localized name of a mouse button; never returns NULL
 const wchar_t *lang_button_name(MouseButton button);
 
+// Get the short label of a mouse button for the filter row (never NULL).
+// Shorter than lang_button_name on purpose: six of them share one line.
+const wchar_t *lang_filter_label(MouseButton button);
+
 // Get the single glyph drawn inside the test area ring
 const wchar_t *lang_button_mark(MouseButton button);
+
+// Which way a wheel notch went, for the ring mark; empty when delta is zero.
+// Positive delta is away from the user, exactly as the hook reports it.
+const wchar_t *lang_scroll_mark(int32_t delta);
 
 // Name used by the log panes: the same word without the space, because the
 // column has room for eight cells and "Side 1" would push the rest of the row.
@@ -291,6 +332,12 @@ size_t lang_display_width(const wchar_t *text);
 
 // Build the column header of the log panes
 const wchar_t *lang_format_log_header(wchar_t *buffer, size_t buffer_count);
+
+// Section label that introduces the rows of one program in the live pane.
+//
+// A label rather than a "switched to" transition: the pane lists newest first,
+// so the label sits above the rows it describes and is read as a heading.
+const wchar_t *lang_format_live_section(wchar_t *buffer, size_t buffer_count, const wchar_t *name);
 
 // Build one log row; every argument is a finished cell text (or NULL)
 //
